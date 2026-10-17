@@ -43,6 +43,8 @@ def update_vendor(vendor_id: int, payload: VendorUpdate, session: SessionDep):
     changes = payload.model_dump(exclude_unset=True)
     if "name" in changes:
         _ensure_unique_name(session, changes["name"], exclude_id=vendor_id)
+    if "is_allowed" in changes:
+        changes["needs_review"] = False  # una persona ya decidió sobre este proveedor
     vendor.sqlmodel_update(changes)
     session.add(vendor)
     session.commit()

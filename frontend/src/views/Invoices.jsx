@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api'
 import Icon from '../components/icons'
+import UploadCard from '../components/UploadCard'
 import { Button, Card, Empty, ErrorBox, Field, Loading, Segmented, StatusBadge } from '../components/ui'
 import { dateTime, money, shortDate, STATUS } from '../format'
 import { inputClass } from '../components/styles'
@@ -41,7 +42,7 @@ function NewInvoiceForm({ vendors, currencies, onCreated }) {
   }
 
   return (
-    <Card title="Nueva factura" subtitle="El agente la evalúa en cuanto la envías">
+    <Card title="Ingreso manual" subtitle="Para facturas sin archivo; el agente la evalúa al enviarla">
       <form className="space-y-4" onSubmit={submit} noValidate>
         <Field label="Proveedor">
           <select className={inputClass} value={form.vendor_id} onChange={set('vendor_id')}>
@@ -92,6 +93,7 @@ function VendorCell({ name }) {
 
 export default function Invoices({ version, onChange, openInvoice }) {
   const [filter, setFilter] = useState('')
+  const [manualOpen, setManualOpen] = useState(false)
   // Se cargan todas para mostrar el conteo por estado; el filtro se aplica en cliente
   const invoices = useLoad(() => api.invoices.list(), version)
   const vendors = useLoad(() => api.vendors.list(), version)
@@ -107,15 +109,28 @@ export default function Invoices({ version, onChange, openInvoice }) {
 
   return (
     <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
-      <div className="lg:sticky lg:top-24 lg:col-span-4">
-        <NewInvoiceForm
-          vendors={vendors.data ?? []}
-          currencies={policy.data?.allowed_currencies ?? []}
-          onCreated={(invoice) => {
-            onChange()
-            openInvoice(invoice.id)
-          }}
-        />
+      <div className="space-y-4 lg:col-span-4">
+        <UploadCard version={version} onChange={onChange} openInvoice={openInvoice} />
+
+        <button
+          type="button"
+          aria-expanded={manualOpen}
+          onClick={() => setManualOpen((o) => !o)}
+          className="flex w-full items-center justify-between rounded-control px-1 py-1 text-[13px] font-medium text-muted transition-colors hover:text-ink"
+        >
+          ¿No tienes el archivo? Ingresar los datos a mano
+          <Icon name="chevronRight" size={16} className={`transition-transform ${manualOpen ? 'rotate-90' : ''}`} />
+        </button>
+        {manualOpen && (
+          <NewInvoiceForm
+            vendors={vendors.data ?? []}
+            currencies={policy.data?.allowed_currencies ?? []}
+            onCreated={(invoice) => {
+              onChange()
+              openInvoice(invoice.id)
+            }}
+          />
+        )}
       </div>
 
       <div className="lg:col-span-8">
@@ -125,7 +140,7 @@ export default function Invoices({ version, onChange, openInvoice }) {
           {invoices.loading && !invoices.data && <Loading rows={5} />}
           {invoices.data && rows.length === 0 && (
             <Empty icon="file" title={filter ? 'Sin facturas con este estado' : 'Aún no hay facturas'}>
-              {filter ? 'Prueba con otro filtro.' : 'Envía la primera desde el formulario.'}
+              {filter ? 'Prueba con otro filtro.' : 'Sube la primera factura para que el agente la procese.'}
             </Empty>
           )}
 

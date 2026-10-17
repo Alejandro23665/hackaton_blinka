@@ -14,10 +14,11 @@ async function request(path, { method = 'GET', body, params } = {}) {
   const url = new URL(path, BASE_URL)
   Object.entries(params ?? {}).forEach(([k, v]) => v != null && v !== '' && url.searchParams.set(k, v))
 
+  const isForm = body instanceof FormData
   const response = await fetch(url, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    headers: body && !isForm ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
   })
   const data = await response.json().catch(() => null)
   if (!response.ok) throw new Error(errorMessage(data, response.status))
@@ -47,5 +48,14 @@ export const api = {
   },
   decisions: {
     list: (params) => request('/decisions', { params }),
+  },
+  documents: {
+    list: (params) => request('/documents', { params }),
+    upload: (file) => {
+      const form = new FormData()
+      form.append('file', file)
+      return request('/documents', { method: 'POST', body: form })
+    },
+    fileUrl: (id) => new URL(`/documents/${id}/file`, BASE_URL).toString(),
   },
 }

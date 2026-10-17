@@ -29,7 +29,7 @@ def client(engine):
 
     with engine.begin() as conn:
         conn.execute(
-            text("TRUNCATE decisions, invoices, vendors, policies RESTART IDENTITY CASCADE")
+            text("TRUNCATE documents, decisions, invoices, vendors, policies RESTART IDENTITY CASCADE")
         )
 
     def override_session():

@@ -42,7 +42,25 @@ def _money(value: Decimal) -> str:
 def check_vendor_allowed(vendor: Vendor) -> RuleResult:
     if vendor.is_allowed:
         return RuleResult("vendor_allowed", True, HARD, f"{vendor.name} está autorizado")
+    if vendor.needs_review:
+        # Proveedor nuevo detectado en una factura subida: decide una persona
+        return RuleResult(
+            "vendor_allowed", False, SOFT, f"{vendor.name} es un proveedor nuevo pendiente de aprobación"
+        )
     return RuleResult("vendor_allowed", False, HARD, f"{vendor.name} no está autorizado")
+
+
+def check_extraction(extraction: dict, min_confidence: float) -> RuleResult:
+    confidence = float(extraction.get("confidence") or 0)
+    warnings = extraction.get("warnings") or []
+    pct = f"{confidence:.0%}"
+    if confidence < min_confidence:
+        detail = f"Confianza de lectura {pct} (mínimo {min_confidence:.0%})"
+    elif warnings:
+        detail = "Lectura con avisos: " + "; ".join(w.strip().rstrip(".") for w in warnings) + "."
+    else:
+        return RuleResult("document_extraction", True, SOFT, f"Datos leídos del documento con confianza {pct}")
+    return RuleResult("document_extraction", False, SOFT, detail)
 
 
 def check_active_policy(policy: Policy | None) -> RuleResult:
@@ -110,9 +128,16 @@ def check_require_human(invoice: Invoice, policy: Policy) -> RuleResult:
 
 
 def evaluate(
-    invoice: Invoice, vendor: Vendor, policy: Policy | None, spent_in_period: Decimal
+    invoice: Invoice,
+    vendor: Vendor,
+    policy: Policy | None,
+    spent_in_period: Decimal,
+    extraction: dict | None = None,
+    min_confidence: float = 0.8,
 ) -> Evaluation:
     rules = [check_vendor_allowed(vendor), check_active_policy(policy)]
+    if extraction is not None:
+        rules.append(check_extraction(extraction, min_confidence))
     if policy is not None:
         rules += [
             check_currency_allowed(invoice, policy),

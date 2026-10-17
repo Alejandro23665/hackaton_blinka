@@ -8,7 +8,7 @@ Agente que revisa facturas y decide si pagarlas, bloquearlas o escalarlas según
 hackaton_blinka/
 ├── docker-compose.yml        # PostgreSQL 16
 ├── .env.example
-├── docs/                     # Diseño: modelo de datos, reglas y API
+├── docs/                     # Diseño: datos, reglas, API y subida de facturas
 ├── backend/
 │   ├── requirements.txt
 │   ├── alembic.ini
@@ -22,7 +22,8 @@ hackaton_blinka/
 │       ├── models/           # Tablas SQLModel
 │       ├── schemas/          # DTOs de la API
 │       ├── api/              # Routers
-│       ├── services/         # Motor de reglas (rules.py) y agente (agent.py)
+│       ├── services/         # Reglas, agente, extracción (OpenRouter) y almacenamiento
+│   └── storage/              # Facturas subidas (local, ignorado por git)
 │       └── seed.py           # Datos de ejemplo para la demo
 └── frontend/                 # React + Vite + Tailwind
     └── src/
@@ -53,6 +54,10 @@ cd frontend
 npm install
 npm run dev                      # http://localhost:5173
 ```
+
+Para que el agente lea facturas subidas, añade tu clave de OpenRouter en `.env`
+(`OPENROUTER_API_KEY=...`) y reinicia el backend. Detalles en
+[docs/03-document-upload.md](docs/03-document-upload.md).
 
 El frontend usa `VITE_API_URL` (por defecto `http://localhost:8000`); ver `frontend/.env.example`.
 

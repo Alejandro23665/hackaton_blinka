@@ -79,6 +79,16 @@
   }
 }
 
+/* Barra indeterminada mientras el agente lee una factura */
+@keyframes upload {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
 /* Desplazamiento horizontal sin barra visible (filtros en móvil) */
 @utility scrollbar-none {
   scrollbar-width: none;

@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlmodel import col, select
 
 from app.api.deps import SessionDep
-from app.models import Decision, Invoice, Vendor
+from app.models import Decision, Document, Invoice, Vendor
 from app.schemas import InvoiceCreate, InvoiceDetail, InvoiceRead, ReviewRequest
 from app.services import agent
 
@@ -22,11 +22,13 @@ def _detail(session: SessionDep, invoice: Invoice) -> InvoiceDetail:
         .where(Decision.invoice_id == invoice.id)
         .order_by(col(Decision.created_at), col(Decision.id))
     ).all()
+    document = session.exec(select(Document).where(Document.invoice_id == invoice.id)).first()
     return InvoiceDetail.model_validate(
         {
             **InvoiceRead.model_validate(invoice).model_dump(),
             "vendor": session.get(Vendor, invoice.vendor_id),
             "decisions": decisions,
+            "document": document,
         }
     )
 

@@ -20,6 +20,7 @@ export const RULE_LABELS = {
   max_amount_per_invoice: 'Máximo por factura',
   period_budget: 'Presupuesto del periodo',
   require_human_above: 'Umbral de revisión humana',
+  document_extraction: 'Lectura del documento',
 }
 
 export function money(amount, currency) {
@@ -46,3 +47,9 @@ export function dateTime(value) {
 }
 
 export const PERIOD_LABELS = { monthly: 'Mensual', weekly: 'Semanal' }
+
+export function fileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / 1024 / 1024).toLocaleString('es', { maximumFractionDigits: 1 })} MB`
+}

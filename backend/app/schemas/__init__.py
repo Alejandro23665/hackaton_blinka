@@ -18,18 +18,22 @@ class ReadModel(BaseModel):
 
 class VendorCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+    tax_id: str | None = Field(default=None, max_length=50)
     is_allowed: bool = True
 
 
 class VendorUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
+    tax_id: str | None = Field(default=None, max_length=50)
     is_allowed: bool | None = None
 
 
 class VendorRead(ReadModel):
     id: int
     name: str
+    tax_id: str | None
     is_allowed: bool
+    needs_review: bool
     created_at: datetime
 
 
@@ -123,9 +127,24 @@ class DecisionRead(ReadModel):
     created_at: datetime
 
 
+# --- Documents -------------------------------------------------------------
+
+class DocumentRead(ReadModel):
+    id: int
+    original_name: str
+    content_type: str
+    size_bytes: int
+    status: str
+    extraction: dict[str, Any] | None
+    error: str | None
+    invoice_id: int | None
+    created_at: datetime
+
+
 class InvoiceDetail(InvoiceRead):
     vendor: VendorRead
     decisions: list[DecisionRead]
+    document: DocumentRead | None = None
 
 
 class ReviewRequest(BaseModel):

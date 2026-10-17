@@ -5,6 +5,7 @@ from decimal import Decimal
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
+from app.core.config import settings
 from app.models import Decision, Invoice, Policy, Vendor
 from app.services import rules
 
@@ -51,7 +52,18 @@ def evaluate_invoice(session: Session, invoice: Invoice) -> Decision:
         else Decimal(0)
     )
 
-    result = rules.evaluate(invoice, vendor, policy, spent)
+    # Facturas leídas de un archivo: la calidad de la extracción también cuenta
+    raw = invoice.raw_data or {}
+    extraction = raw.get("extraction") if raw.get("source") == "document" else None
+
+    result = rules.evaluate(
+        invoice,
+        vendor,
+        policy,
+        spent,
+        extraction=extraction,
+        min_confidence=settings.EXTRACTION_MIN_CONFIDENCE,
+    )
 
     decision = Decision(
         invoice_id=invoice.id,

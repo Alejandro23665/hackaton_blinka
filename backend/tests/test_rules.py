@@ -93,3 +93,42 @@ def test_escalates_without_active_policy():
 def test_blocked_vendor_wins_over_missing_policy():
     result = evaluate(make_invoice("10"), SHADY, None, Decimal("0"))
     assert result.outcome == "blocked"
+
+
+# --- Facturas leídas de un documento -------------------------------------------
+
+PENDING = Vendor(id=3, name="Nuevo SAC", is_allowed=False, needs_review=True)
+GOOD_EXTRACTION = {"confidence": 0.95, "warnings": []}
+
+
+def test_new_pending_vendor_escalates_instead_of_blocking():
+    result = evaluate(make_invoice("500"), PENDING, make_policy(), Decimal("0"))
+    assert result.outcome == "escalated"
+    assert failed(result) == {"vendor_allowed"}
+    assert "pendiente de aprobación" in result.explanation
+
+
+def test_document_with_good_extraction_is_approved():
+    result = evaluate(make_invoice("500"), ACME, make_policy(), Decimal("0"), extraction=GOOD_EXTRACTION)
+    assert result.outcome == "approved"
+    assert len(result.rules) == 7
+
+
+def test_low_confidence_extraction_escalates():
+    result = evaluate(
+        make_invoice("500"), ACME, make_policy(), Decimal("0"), extraction={"confidence": 0.6, "warnings": []}
+    )
+    assert result.outcome == "escalated"
+    assert failed(result) == {"document_extraction"}
+
+
+def test_extraction_warnings_escalate():
+    extraction = {"confidence": 0.9, "warnings": ["Moneda deducida por el símbolo $"]}
+    result = evaluate(make_invoice("500"), ACME, make_policy(), Decimal("0"), extraction=extraction)
+    assert result.outcome == "escalated"
+    assert "Moneda deducida" in result.explanation
+
+
+def test_hard_rule_still_blocks_document_invoice():
+    result = evaluate(make_invoice("9000"), ACME, make_policy(), Decimal("0"), extraction=GOOD_EXTRACTION)
+    assert result.outcome == "blocked"
