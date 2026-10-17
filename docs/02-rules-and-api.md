@@ -66,10 +66,10 @@ POST /invoices
   "decisions": [{
     "outcome": "escalated",
     "decided_by": "agent",
-    "explanation": "Escalada a revisión humana: 2,000.00 supera el umbral de revisión 1,000.00.",
+    "explanation": "Escalada a revisión humana: 2.000,00 supera el umbral de revisión 1.000,00.",
     "rules_evaluated": [
       {"rule": "vendor_allowed", "passed": true, "severity": "hard", "detail": "ACME está autorizado"},
-      {"rule": "require_human_above", "passed": false, "severity": "soft", "detail": "2,000.00 supera el umbral de revisión 1,000.00"}
+      {"rule": "require_human_above", "passed": false, "severity": "soft", "detail": "2.000,00 supera el umbral de revisión 1.000,00"}
     ]
   }]
 }

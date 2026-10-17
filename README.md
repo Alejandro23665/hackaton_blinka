@@ -8,7 +8,7 @@ Agente que revisa facturas y decide si pagarlas, bloquearlas o escalarlas según
 hackaton_blinka/
 ├── docker-compose.yml        # PostgreSQL 16
 ├── .env.example
-├── docs/                     # Diseño (01-database.md)
+├── docs/                     # Diseño: modelo de datos, reglas y API
 ├── backend/
 │   ├── requirements.txt
 │   ├── alembic.ini
@@ -22,8 +22,13 @@ hackaton_blinka/
 │       ├── models/           # Tablas SQLModel
 │       ├── schemas/          # DTOs de la API
 │       ├── api/              # Routers
-│       └── services/         # Motor de reglas / agente
-└── frontend/                 # React + Vite + Tailwind (próximo paso)
+│       ├── services/         # Motor de reglas (rules.py) y agente (agent.py)
+│       └── seed.py           # Datos de ejemplo para la demo
+└── frontend/                 # React + Vite + Tailwind
+    └── src/
+        ├── api.js            # Cliente de la API
+        ├── components/       # UI, detalle de factura, reglas, revisión
+        └── views/            # Panel, Facturas, Proveedores, Políticas
 ```
 
 ## Puesta en marcha
@@ -37,8 +42,19 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows  (Linux/Mac: source .venv/bin/activate)
 pip install -r requirements.txt
 alembic upgrade head
+python -m app.seed               # opcional: datos de ejemplo
 uvicorn app.main:app --reload    # http://localhost:8000/docs
 ```
+
+En otra terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev                      # http://localhost:5173
+```
+
+El frontend usa `VITE_API_URL` (por defecto `http://localhost:8000`); ver `frontend/.env.example`.
 
 ## Tests
 

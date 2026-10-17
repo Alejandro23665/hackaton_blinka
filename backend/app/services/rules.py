@@ -35,7 +35,8 @@ class Evaluation:
 
 
 def _money(value: Decimal) -> str:
-    return f"{value:,.2f}"
+    """Formato español: 9.000,00"""
+    return f"{value:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
 
 
 def check_vendor_allowed(vendor: Vendor) -> RuleResult:
