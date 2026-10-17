@@ -97,10 +97,10 @@ Montos: usar `NUMERIC(14,2)`, nunca `float`.
      {"rule": "currency_allowed",      "passed": true,  "detail": "USD permitido"},
      {"rule": "max_amount_per_invoice","passed": true,  "detail": "1200 <= 5000"},
      {"rule": "period_budget",         "passed": true,  "detail": "Gastado 8000 + 1200 <= 20000"},
-     {"rule": "require_human_above",   "passed": false, "detail": "1200 > 1000 → escalar"},
-     {"rule": "duplicate_invoice",     "passed": true,  "detail": "No existe otra INV-001 de ACME"}
+     {"rule": "require_human_above",   "passed": false, "detail": "1200 > 1000 → escalar"}
    ]
    ```
 6. **Precedencia del resultado** (se implementará en el motor de reglas):
-   cualquier regla dura falla (vendor, moneda, monto máx., presupuesto, duplicado) → `blocked`;
+   cualquier regla dura falla (vendor, moneda, monto máx., presupuesto) → `blocked`
+   (los duplicados se rechazan antes, con un 409 en la API);
    si no, supera `require_human_above` → `escalated`; si no → `approved`.

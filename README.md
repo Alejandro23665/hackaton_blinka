@@ -40,6 +40,24 @@ alembic upgrade head
 uvicorn app.main:app --reload    # http://localhost:8000/docs
 ```
 
+## Tests
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest                                   # motor de reglas (sin BD)
+```
+
+Los tests de API necesitan una base Postgres **vacía y dedicada** (se borran sus tablas):
+
+```bash
+docker compose exec db createdb -U blinka blinka_test
+set TEST_DATABASE_URL=postgresql+psycopg://blinka:blinka@localhost:5432/blinka_test
+pytest
+```
+
+Ver [docs/02-rules-and-api.md](docs/02-rules-and-api.md) para las reglas y los endpoints.
+
 ## Migraciones
 
 ```bash
