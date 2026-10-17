@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: blinka-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-blinka}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-blinka}
+      POSTGRES_DB: ${POSTGRES_DB:-blinka}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-blinka}"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  pgdata:
