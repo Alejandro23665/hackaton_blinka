@@ -1,5 +1,97 @@
 @import 'tailwindcss';
 
-body {
-  @apply bg-slate-50 text-slate-800 antialiased;
+/*
+ * Tokens de diseño de Blinka (Light Mode Premium).
+ * Tailwind v4 genera utilidades a partir de @theme: bg-brand-600, text-ink, rounded-card, shadow-card…
+ */
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* Identidad: morado como acento, nunca como fondo dominante */
+  --color-brand-50: #f6f4fd;
+  --color-brand-100: #ede9fe;
+  --color-brand-200: #ddd6fe;
+  --color-brand-300: #c4b5fd;
+  --color-brand-400: #a78bfa;
+  --color-brand-500: #8b5cf6;
+  --color-brand-600: #6d28d9;
+  --color-brand-700: #5b21b6;
+  --color-brand-800: #4c1d95;
+  --color-brand-900: #2e1065;
+
+  /* Neutros */
+  --color-canvas: #ffffff;
+  --color-surface: #f7f6fa;
+  --color-surface-strong: #efedf5;
+  --color-line: #e9e7f0;
+  --color-line-strong: #d9d6e3;
+  --color-ink: #1f1b2d;
+  --color-muted: #625d74; /* texto secundario: 6.2:1 sobre blanco */
+  --color-subtle: #8a859b; /* solo para texto auxiliar no esencial */
+
+  /* Semánticos (suaves) */
+  --color-success-50: #ecfdf3;
+  --color-success-600: #0f8a4f;
+  --color-success-700: #067647;
+  --color-warning-50: #fff8eb;
+  --color-warning-600: #b54708;
+  --color-warning-700: #93370d;
+  --color-danger-50: #fef2f2;
+  --color-danger-600: #c0262d;
+  --color-danger-700: #a3161f;
+
+  --radius-card: 18px;
+  --radius-control: 12px;
+
+  --shadow-card: 0 1px 2px rgb(31 27 45 / 0.04), 0 8px 24px -12px rgb(31 27 45 / 0.08);
+  --shadow-pop: 0 2px 6px rgb(31 27 45 / 0.06), 0 24px 48px -16px rgb(31 27 45 / 0.18);
+  --shadow-control: 0 1px 2px rgb(31 27 45 / 0.06);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-canvas font-sans text-ink antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+
+  ::selection {
+    @apply bg-brand-100 text-brand-800;
+  }
+
+  /* Anillo de foco visible y consistente solo con teclado */
+  :focus-visible {
+    outline: 2px solid var(--color-brand-600);
+    outline-offset: 2px;
+  }
+
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: none;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Desplazamiento horizontal sin barra visible (filtros en móvil) */
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

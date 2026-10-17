@@ -25,6 +25,7 @@ async function request(path, { method = 'GET', body, params } = {}) {
 }
 
 export const api = {
+  health: () => request('/health'),
   vendors: {
     list: () => request('/vendors'),
     create: (data) => request('/vendors', { method: 'POST', body: data }),

@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { dateTime, money, shortDate } from '../format'
 import { useLoad } from '../hooks'
+import Icon from './icons'
 import ReviewForm from './ReviewForm'
 import RulesList from './RulesList'
-import { Button, ErrorBox, Loading, StatusBadge } from './ui'
+import { Button, ErrorBox, IconButton, Loading, StatusBadge, Tile } from './ui'
 
 const REEVALUABLE = ['pending', 'escalated', 'blocked']
 
@@ -13,6 +14,17 @@ export default function InvoiceDetail({ invoiceId, onClose, onChange }) {
   const { data: invoice, error, loading, reload } = useLoad(() => api.invoices.get(invoiceId), invoiceId)
   const [actionError, setActionError] = useState(null)
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose()
+    document.addEventListener('keydown', onKey)
+    const overflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = overflow
+    }
+  }, [onClose])
 
   function refresh() {
     reload()
@@ -33,90 +45,104 @@ export default function InvoiceDetail({ invoiceId, onClose, onChange }) {
   }
 
   return (
-    <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" onClick={onClose}>
+    <div className="fixed inset-0 z-30 flex justify-end bg-ink/20 backdrop-blur-[2px]" onClick={onClose}>
       <aside
-        className="h-full w-full max-w-xl overflow-y-auto bg-white p-6 shadow-xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="invoice-title"
+        className="flex h-full w-full max-w-xl flex-col bg-canvas shadow-pop sm:rounded-l-[24px]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-6 flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm text-slate-500">Factura</p>
-            <h2 className="text-xl font-semibold text-slate-900">{invoice?.invoice_number ?? '…'}</h2>
+        <header className="flex items-start justify-between gap-4 border-b border-line px-5 py-5 sm:px-7">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-subtle">Factura</p>
+            <h2 id="invoice-title" className="truncate text-xl font-semibold tracking-tight text-ink">
+              {invoice?.invoice_number ?? '…'}
+            </h2>
           </div>
-          <button className="rounded-lg p-1 text-2xl leading-none text-slate-400 hover:text-slate-700" onClick={onClose} aria-label="Cerrar">
-            ×
-          </button>
-        </div>
+          <div className="flex items-center gap-3">
+            {invoice && <StatusBadge status={invoice.status} />}
+            <IconButton icon="x" label="Cerrar" onClick={onClose} />
+          </div>
+        </header>
 
-        {loading && !invoice && <Loading />}
-        <ErrorBox message={error} />
+        <div className="flex-1 overflow-y-auto px-5 py-6 sm:px-7">
+          {loading && !invoice && <Loading rows={4} />}
+          <ErrorBox message={error} />
 
-        {invoice && (
-          <div className="space-y-6">
-            <dl className="grid grid-cols-2 gap-4 rounded-xl bg-slate-50 p-4 text-sm">
-              <div>
-                <dt className="text-slate-500">Proveedor</dt>
-                <dd className="font-medium">
-                  {invoice.vendor.name}
-                  {!invoice.vendor.is_allowed && <span className="ml-1 text-xs text-rose-600">(no autorizado)</span>}
-                </dd>
+          {invoice && (
+            <div className="space-y-7">
+              <div className="grid grid-cols-2 gap-3">
+                <Tile className="col-span-2">
+                  <p className="text-xs text-muted">Monto</p>
+                  <p className="mt-1 text-3xl font-semibold tracking-tight text-ink tabular">{money(invoice.amount, invoice.currency)}</p>
+                </Tile>
+                <Tile>
+                  <p className="text-xs text-muted">Proveedor</p>
+                  <p className="mt-1 truncate text-sm font-semibold text-ink">{invoice.vendor.name}</p>
+                  <p className={`mt-0.5 text-xs ${invoice.vendor.is_allowed ? 'text-success-700' : 'text-danger-600'}`}>
+                    {invoice.vendor.is_allowed ? 'Autorizado' : 'No autorizado'}
+                  </p>
+                </Tile>
+                <Tile>
+                  <p className="text-xs text-muted">Vencimiento</p>
+                  <p className="mt-1 text-sm font-semibold text-ink">{shortDate(invoice.due_date)}</p>
+                  <p className="mt-0.5 text-xs text-subtle">Recibida {dateTime(invoice.created_at)}</p>
+                </Tile>
               </div>
-              <div>
-                <dt className="text-slate-500">Estado</dt>
-                <dd><StatusBadge status={invoice.status} /></dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">Monto</dt>
-                <dd className="text-lg font-semibold">{money(invoice.amount, invoice.currency)}</dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">Vencimiento</dt>
-                <dd className="font-medium">{shortDate(invoice.due_date)}</dd>
-              </div>
-            </dl>
 
-            {invoice.status === 'escalated' && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-                <p className="mb-3 text-sm font-medium text-amber-900">Esta factura espera tu decisión</p>
-                <ReviewForm invoiceId={invoice.id} onDone={refresh} />
-              </div>
-            )}
+              {invoice.status === 'escalated' && (
+                <section className="rounded-card border border-warning-600/20 bg-warning-50 p-4">
+                  <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-warning-700">
+                    <Icon name="user" size={16} />
+                    Esta factura espera tu decisión
+                  </p>
+                  <ReviewForm invoiceId={invoice.id} onDone={refresh} />
+                </section>
+              )}
 
-            {REEVALUABLE.includes(invoice.status) && (
-              <div className="space-y-2">
-                <Button variant="secondary" disabled={busy} onClick={reevaluate}>
-                  Reevaluar con la política activa
-                </Button>
-                <ErrorBox message={actionError} />
-              </div>
-            )}
+              {REEVALUABLE.includes(invoice.status) && (
+                <div className="space-y-2">
+                  <Button variant="secondary" icon="refresh" disabled={busy} onClick={reevaluate}>
+                    {busy ? 'Reevaluando…' : 'Reevaluar con la política activa'}
+                  </Button>
+                  <ErrorBox message={actionError} />
+                </div>
+              )}
 
-            <div>
-              <h3 className="mb-3 text-sm font-semibold text-slate-900">Historial de decisiones</h3>
-              <ol className="space-y-4">
-                {[...invoice.decisions].reverse().map((d) => (
-                  <li key={d.id} className="rounded-xl border border-slate-200 p-4">
-                    <div className="mb-2 flex flex-wrap items-center gap-2">
-                      <StatusBadge status={d.outcome} />
-                      <span className="text-xs text-slate-500">
-                        {d.decided_by === 'agent' ? 'Agente' : 'Humano'} · {dateTime(d.created_at)}
-                      </span>
-                    </div>
-                    <p className="mb-3 text-sm text-slate-700">{d.explanation}</p>
-                    <RulesList rules={d.rules_evaluated} />
-                  </li>
-                ))}
-              </ol>
+              <section>
+                <h3 className="mb-4 text-sm font-semibold text-ink">Historial de decisiones</h3>
+                <ol className="relative space-y-6 border-l border-line pl-6">
+                  {[...invoice.decisions].reverse().map((d) => (
+                    <li key={d.id} className="relative">
+                      <span className="absolute top-1 -left-[31px] flex h-4 w-4 items-center justify-center rounded-full border-2 border-canvas bg-brand-600 ring-1 ring-brand-200" />
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <StatusBadge status={d.outcome} size="sm" />
+                        <span className="flex items-center gap-1 text-xs text-subtle">
+                          <Icon name={d.decided_by === 'agent' ? 'bot' : 'user'} size={13} />
+                          {d.decided_by === 'agent' ? 'Agente' : 'Humano'} · {dateTime(d.created_at)}
+                        </span>
+                      </div>
+                      <p className="mb-3 text-sm leading-relaxed text-ink">{d.explanation}</p>
+                      <RulesList rules={d.rules_evaluated} />
+                    </li>
+                  ))}
+                </ol>
+              </section>
+
+              <details className="group rounded-control border border-line">
+                <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[13px] font-medium text-muted hover:text-ink">
+                  <Icon name="code" size={16} />
+                  Datos originales (raw_data)
+                  <Icon name="chevronRight" size={14} className="ml-auto transition-transform group-open:rotate-90" />
+                </summary>
+                <pre className="overflow-x-auto border-t border-line bg-surface px-4 py-3 text-xs leading-relaxed text-ink">
+                  {JSON.stringify(invoice.raw_data, null, 2)}
+                </pre>
+              </details>
             </div>
-
-            <details className="text-sm">
-              <summary className="cursor-pointer text-slate-500">Datos originales (raw_data)</summary>
-              <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs text-slate-100">
-                {JSON.stringify(invoice.raw_data, null, 2)}
-              </pre>
-            </details>
-          </div>
-        )}
+          )}
+        </div>
       </aside>
     </div>
   )

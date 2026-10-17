@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { api } from '../api'
-import { Button, Card, Empty, ErrorBox, Field, inputClass, Loading, StatusBadge } from '../components/ui'
+import Icon from '../components/icons'
+import { Button, Card, Empty, ErrorBox, Field, Loading, Segmented, StatusBadge } from '../components/ui'
 import { dateTime, money, shortDate, STATUS } from '../format'
+import { inputClass } from '../components/styles'
 import { useLoad } from '../hooks'
 
 const EMPTY_FORM = { vendor_id: '', invoice_number: '', amount: '', currency: 'USD', due_date: '' }
@@ -39,11 +41,11 @@ function NewInvoiceForm({ vendors, currencies, onCreated }) {
   }
 
   return (
-    <Card title="Nueva factura">
-      <form className="space-y-4" onSubmit={submit}>
+    <Card title="Nueva factura" subtitle="El agente la evalúa en cuanto la envías">
+      <form className="space-y-4" onSubmit={submit} noValidate>
         <Field label="Proveedor">
           <select className={inputClass} value={form.vendor_id} onChange={set('vendor_id')}>
-            <option value="">Selecciona…</option>
+            <option value="">Selecciona un proveedor</option>
             {vendors.map((v) => (
               <option key={v.id} value={v.id}>
                 {v.name}{v.is_allowed ? '' : ' (no autorizado)'}
@@ -54,12 +56,10 @@ function NewInvoiceForm({ vendors, currencies, onCreated }) {
         <Field label="Número de factura">
           <input className={inputClass} placeholder="INV-0001" value={form.invoice_number} onChange={set('invoice_number')} />
         </Field>
-        <div className="grid grid-cols-3 gap-3">
-          <div className="col-span-2">
-            <Field label="Monto">
-              <input className={inputClass} type="number" min="0.01" step="0.01" placeholder="0.00" value={form.amount} onChange={set('amount')} />
-            </Field>
-          </div>
+        <div className="grid grid-cols-[1fr_96px] gap-3">
+          <Field label="Monto">
+            <input className={`${inputClass} tabular`} type="number" inputMode="decimal" min="0.01" step="0.01" placeholder="0,00" value={form.amount} onChange={set('amount')} />
+          </Field>
           <Field label="Moneda">
             <input className={`${inputClass} uppercase`} maxLength={3} list="currencies" value={form.currency} onChange={set('currency')} />
             <datalist id="currencies">
@@ -71,7 +71,7 @@ function NewInvoiceForm({ vendors, currencies, onCreated }) {
           <input className={inputClass} type="date" value={form.due_date} onChange={set('due_date')} />
         </Field>
         <ErrorBox message={error} />
-        <Button type="submit" disabled={busy} className="w-full">
+        <Button type="submit" icon="bot" disabled={busy} className="w-full">
           {busy ? 'Evaluando…' : 'Enviar al agente'}
         </Button>
       </form>
@@ -79,17 +79,35 @@ function NewInvoiceForm({ vendors, currencies, onCreated }) {
   )
 }
 
+function VendorCell({ name }) {
+  return (
+    <span className="flex min-w-0 items-center gap-2.5">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-100 text-[11px] font-semibold text-brand-800">
+        {name.slice(0, 1).toUpperCase()}
+      </span>
+      <span className="truncate">{name}</span>
+    </span>
+  )
+}
+
 export default function Invoices({ version, onChange, openInvoice }) {
   const [filter, setFilter] = useState('')
-  const invoices = useLoad(() => api.invoices.list({ status: filter }), `${version}-${filter}`)
+  // Se cargan todas para mostrar el conteo por estado; el filtro se aplica en cliente
+  const invoices = useLoad(() => api.invoices.list(), version)
   const vendors = useLoad(() => api.vendors.list(), version)
   const policy = useLoad(() => api.policies.active().catch(() => null), version)
 
   const vendorName = (id) => vendors.data?.find((v) => v.id === id)?.name ?? `#${id}`
+  const all = invoices.data ?? []
+  const rows = filter ? all.filter((i) => i.status === filter) : all
+  const filterOptions = [
+    { value: '', label: 'Todas', count: all.length },
+    ...Object.entries(STATUS).map(([value, s]) => ({ value, label: s.label, count: all.filter((i) => i.status === value).length })),
+  ]
 
   return (
-    <div className="grid gap-6 lg:grid-cols-3">
-      <div className="lg:col-span-1">
+    <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
+      <div className="lg:sticky lg:top-24 lg:col-span-4">
         <NewInvoiceForm
           vendors={vendors.data ?? []}
           currencies={policy.data?.allowed_currencies ?? []}
@@ -100,55 +118,77 @@ export default function Invoices({ version, onChange, openInvoice }) {
         />
       </div>
 
-      <div className="lg:col-span-2">
-        <Card
-          title="Facturas"
-          action={
-            <div className="flex flex-wrap gap-1">
-              {[['', 'Todas'], ...Object.entries(STATUS).map(([k, v]) => [k, v.label])].map(([key, label]) => (
-                <button
-                  key={key}
-                  onClick={() => setFilter(key)}
-                  className={`rounded-full px-3 py-1 text-xs font-medium ${
-                    filter === key ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          }
-        >
+      <div className="lg:col-span-8">
+        <Card title="Facturas" subtitle="Selecciona una factura para ver las reglas y su historial">
+          <Segmented options={filterOptions} value={filter} onChange={setFilter} size="sm" className="mb-4" />
           <ErrorBox message={invoices.error} />
-          {invoices.loading && !invoices.data && <Loading />}
-          {invoices.data?.length === 0 && <Empty>No hay facturas{filter && ' con este estado'}.</Empty>}
-          {invoices.data?.length > 0 && (
-            <div className="-mx-5 overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="text-left text-xs text-slate-500">
-                  <tr className="border-b border-slate-100">
-                    <th className="px-5 py-2 font-medium">Número</th>
-                    <th className="px-3 py-2 font-medium">Proveedor</th>
-                    <th className="px-3 py-2 text-right font-medium">Monto</th>
-                    <th className="px-3 py-2 font-medium">Vence</th>
-                    <th className="px-3 py-2 font-medium">Estado</th>
-                    <th className="hidden px-5 py-2 font-medium xl:table-cell">Recibida</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {invoices.data.map((inv) => (
-                    <tr key={inv.id} className="cursor-pointer hover:bg-slate-50" onClick={() => openInvoice(inv.id)}>
-                      <td className="whitespace-nowrap px-5 py-3 font-medium text-slate-900">{inv.invoice_number}</td>
-                      <td className="px-3 py-3">{vendorName(inv.vendor_id)}</td>
-                      <td className="whitespace-nowrap px-3 py-3 text-right font-medium">{money(inv.amount, inv.currency)}</td>
-                      <td className="whitespace-nowrap px-3 py-3">{shortDate(inv.due_date)}</td>
-                      <td className="px-3 py-3"><StatusBadge status={inv.status} /></td>
-                      <td className="hidden whitespace-nowrap px-5 py-3 text-slate-500 xl:table-cell">{dateTime(inv.created_at)}</td>
+          {invoices.loading && !invoices.data && <Loading rows={5} />}
+          {invoices.data && rows.length === 0 && (
+            <Empty icon="file" title={filter ? 'Sin facturas con este estado' : 'Aún no hay facturas'}>
+              {filter ? 'Prueba con otro filtro.' : 'Envía la primera desde el formulario.'}
+            </Empty>
+          )}
+
+          {rows.length > 0 && (
+            <>
+              {/* Escritorio y tablet: tabla */}
+              <div className="-mx-5 hidden sm:-mx-6 sm:block">
+                <table className="w-full table-fixed text-sm">
+                  <thead>
+                    <tr className="border-y border-line bg-surface text-left text-xs font-medium text-muted">
+                      <th className="w-[22%] py-2.5 pr-3 pl-6 font-medium">Número</th>
+                      <th className="py-2.5 pr-3 font-medium">Proveedor</th>
+                      <th className="w-[20%] py-2.5 pr-3 text-right font-medium">Monto</th>
+                      <th className="hidden w-[15%] py-2.5 pr-3 font-medium md:table-cell">Vence</th>
+                      <th className="w-[17%] py-2.5 pr-6 font-medium">Estado</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-line">
+                    {rows.map((inv) => (
+                      <tr
+                        key={inv.id}
+                        tabIndex={0}
+                        onClick={() => openInvoice(inv.id)}
+                        onKeyDown={(e) => e.key === 'Enter' && openInvoice(inv.id)}
+                        className="cursor-pointer transition-colors hover:bg-brand-50/60 focus-visible:bg-brand-50"
+                      >
+                        <td className="truncate py-3.5 pr-3 pl-6 font-medium text-ink">{inv.invoice_number}</td>
+                        <td className="py-3.5 pr-3 text-ink"><VendorCell name={vendorName(inv.vendor_id)} /></td>
+                        <td className="py-3.5 pr-3 text-right font-semibold whitespace-nowrap text-ink tabular">
+                          {money(inv.amount)} <span className="text-xs font-medium text-subtle">{inv.currency}</span>
+                        </td>
+                        <td className="hidden py-3.5 pr-3 whitespace-nowrap text-muted md:table-cell">{shortDate(inv.due_date)}</td>
+                        <td className="py-3.5 pr-6"><StatusBadge status={inv.status} size="sm" /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Móvil: lista de tarjetas */}
+              <ul className="space-y-2 sm:hidden">
+                {rows.map((inv) => (
+                  <li key={inv.id}>
+                    <button
+                      onClick={() => openInvoice(inv.id)}
+                      className="flex w-full items-center gap-3 rounded-control border border-line p-3 text-left transition-colors active:bg-surface"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate text-sm font-semibold text-ink">{inv.invoice_number}</span>
+                          <span className="text-sm font-semibold whitespace-nowrap text-ink tabular">{money(inv.amount, inv.currency)}</span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between gap-2">
+                          <span className="truncate text-xs text-muted">{vendorName(inv.vendor_id)} · {dateTime(inv.created_at)}</span>
+                          <StatusBadge status={inv.status} size="sm" />
+                        </div>
+                      </div>
+                      <Icon name="chevronRight" size={16} className="text-subtle" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </Card>
       </div>

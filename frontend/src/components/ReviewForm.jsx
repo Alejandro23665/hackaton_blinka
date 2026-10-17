@@ -1,19 +1,21 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { api } from '../api'
-import { Button, ErrorBox, inputClass } from './ui'
+import { textareaClass } from './styles'
+import { Button, ErrorBox } from './ui'
 
 /** Decisión humana sobre una factura escalada. */
 export default function ReviewForm({ invoiceId, onDone }) {
+  const id = useId()
   const [explanation, setExplanation] = useState('')
   const [error, setError] = useState(null)
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState(null)
 
   async function submit(outcome) {
     if (!explanation.trim()) {
       setError('Escribe el motivo de la decisión')
       return
     }
-    setBusy(true)
+    setBusy(outcome)
     setError(null)
     try {
       await api.invoices.review(invoiceId, { outcome, explanation: explanation.trim() })
@@ -22,16 +24,18 @@ export default function ReviewForm({ invoiceId, onDone }) {
     } catch (e) {
       setError(e.message)
     } finally {
-      setBusy(false)
+      setBusy(null)
     }
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
+      <label htmlFor={id} className="sr-only">Motivo de la decisión</label>
       <textarea
-        className={inputClass}
+        id={id}
+        className={textareaClass}
         rows={2}
-        placeholder="Motivo (ej. contrato anual aprobado por finanzas)"
+        placeholder="Motivo de la decisión (ej. contrato anual aprobado por finanzas)"
         value={explanation}
         onChange={(e) => {
           setExplanation(e.target.value)
@@ -39,12 +43,12 @@ export default function ReviewForm({ invoiceId, onDone }) {
         }}
       />
       <ErrorBox message={error} />
-      <div className="flex gap-2">
-        <Button variant="success" disabled={busy} onClick={() => submit('approved')}>
-          Aprobar
+      <div className="flex flex-wrap gap-2">
+        <Button icon="check" disabled={!!busy} onClick={() => submit('approved')} className="flex-1 sm:flex-none">
+          {busy === 'approved' ? 'Aprobando…' : 'Aprobar'}
         </Button>
-        <Button variant="danger" disabled={busy} onClick={() => submit('blocked')}>
-          Bloquear
+        <Button variant="danger" icon="x" disabled={!!busy} onClick={() => submit('blocked')} className="flex-1 sm:flex-none">
+          {busy === 'blocked' ? 'Bloqueando…' : 'Bloquear'}
         </Button>
       </div>
     </div>
