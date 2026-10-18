@@ -58,14 +58,14 @@ def test_full_flow(client):
     # Revisión humana aprueba la escalada
     reviewed = client.post(
         f"/invoices/{escalated['id']}/review",
-        json={"outcome": "approved", "explanation": "Contrato anual firmado"},
+        json={"outcome": "approved", "explanation": "Contrato anual firmado", "reviewer": "Laura Gómez"},
     ).json()
     assert reviewed["status"] == "approved"
     assert [d["decided_by"] for d in reviewed["decisions"]] == ["agent", "human"]
 
     # Ya aprobada: no se puede revisar ni reevaluar
     assert client.post(
-        f"/invoices/{escalated['id']}/review", json={"outcome": "blocked", "explanation": "x"}
+        f"/invoices/{escalated['id']}/review", json={"outcome": "blocked", "explanation": "x", "reviewer": "Laura"}
     ).status_code == 409
     assert client.post(f"/invoices/{escalated['id']}/evaluate").status_code == 409
 
@@ -233,3 +233,40 @@ def test_vendor_tax_id_is_normalized_and_unique(client):
     assert response.status_code == 409 and "Acme" in response.json()["detail"]
     other = client.post("/vendors", json={"name": "Otra"}).json()
     assert client.patch(f"/vendors/{other['id']}", json={"tax_id": "20.123.456.789"}).status_code == 409
+
+
+def test_review_requires_reviewer_and_log_exports_csv(client):
+    client.post("/policies", json=POLICY)
+    acme = create_vendor(client)
+    escalated = create_invoice(client, acme, "BIG-1", 2000).json()
+    create_invoice(client, acme, "OK-1", 100)
+    assert escalated["status"] == "escalated"
+
+    # Sin nombre de quien revisa no se acepta la decisión
+    no_name = client.post(f"/invoices/{escalated['id']}/review", json={"outcome": "approved", "explanation": "ok"})
+    assert no_name.status_code == 422
+    blank = client.post(f"/invoices/{escalated['id']}/review", json={"outcome": "approved", "explanation": "ok", "reviewer": "  "})
+    assert blank.status_code == 422
+    reviewed = client.post(
+        f"/invoices/{escalated['id']}/review",
+        json={"outcome": "approved", "explanation": "Pago trimestral pactado", "reviewer": "Laura Gómez"},
+    ).json()
+    assert reviewed["decisions"][-1]["reviewer"] == "Laura Gómez"
+
+    log = client.get("/decisions/log").json()
+    assert len(log) == 3
+    assert log[0]["decided_by"] == "human" and log[0]["reviewer"] == "Laura Gómez"
+    assert log[0]["vendor_name"] == "ACME" and log[0]["invoice_number"] == "BIG-1"
+    agent_escalation = next(r for r in log if r["decided_by"] == "agent" and r["outcome"] == "escalated")
+    assert agent_escalation["failed_rules"] == ["require_human_above"]
+    assert agent_escalation["policy_name"] == "Base"
+    assert [r["invoice_number"] for r in client.get("/decisions/log", params={"q": "ok-1"}).json()] == ["OK-1"]
+    assert len(client.get("/decisions/log", params={"decided_by": "human"}).json()) == 1
+
+    csv_response = client.get("/decisions/export.csv", params={"outcome": "escalated"})
+    assert csv_response.status_code == 200
+    assert "attachment" in csv_response.headers["content-disposition"]
+    body = csv_response.content.decode("utf-8")
+    assert body.startswith("\ufeffFecha;Factura;Proveedor")
+    lines = body.strip().splitlines()
+    assert len(lines) == 2 and "BIG-1" in lines[1] and "Umbral de revisión humana" in lines[1] and "2000,00" in lines[1]

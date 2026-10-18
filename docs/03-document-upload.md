@@ -5,7 +5,7 @@
 ```
 Archivo (PDF/PNG/JPG/WEBP)
   → POST /documents
-  → se guarda en backend/storage/invoices/AAAA/MM/<hash>.<ext>      (tabla documents)
+  → se guarda en Postgres (tablas documents y document_files)
   → el agente lo lee con un modelo multimodal vía OpenRouter          (JSON estructurado)
   → se busca el proveedor (ID fiscal → nombre) o se crea "pendiente"
   → se crea la factura y el motor de reglas decide                   (tabla decisions)
@@ -21,7 +21,6 @@ al terminar, abre el detalle con lo extraído, la confianza, los avisos y el enl
 | `OPENROUTER_API_KEY` | — | **Obligatoria** para leer facturas |
 | `OPENROUTER_MODEL` | `anthropic/claude-sonnet-5.5` | Cualquier modelo de OpenRouter con entrada de imagen y archivo |
 | `EXTRACTION_MIN_CONFIDENCE` | `0.8` | Por debajo, la factura se escala |
-| `STORAGE_DIR` | `backend/storage` | Carpeta local de los archivos (no va a git) |
 | `MAX_UPLOAD_MB` | `10` | Tamaño máximo |
 | `CORS_ORIGINS` | `["http://localhost:5173"]` | Orígenes del frontend |
 

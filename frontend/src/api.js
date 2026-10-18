@@ -1,4 +1,5 @@
-const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+// Desarrollo: la API corre aparte en :8000. Producción: FastAPI sirve el frontend, misma URL.
+const BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? window.location.origin : 'http://localhost:8000')
 
 function errorMessage(body, status) {
   const detail = body?.detail
@@ -56,6 +57,12 @@ export const api = {
   },
   decisions: {
     list: (params) => request('/decisions', { params }),
+    log: (params) => request('/decisions/log', { params }),
+    exportUrl: (params) => {
+      const url = new URL('/decisions/export.csv', BASE_URL)
+      Object.entries(params ?? {}).forEach(([k, v]) => v && url.searchParams.set(k, v))
+      return url.toString()
+    },
   },
   documents: {
     list: (params) => request('/documents', { params }),
@@ -64,6 +71,7 @@ export const api = {
       form.append('file', file)
       return request('/documents', { method: 'POST', body: form })
     },
+    uploadText: (text, source) => request('/documents/text', { method: 'POST', body: { text, source } }),
     fileUrl: (id) => new URL(`/documents/${id}/file`, BASE_URL).toString(),
   },
 }

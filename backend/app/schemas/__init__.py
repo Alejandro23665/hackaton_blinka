@@ -191,7 +191,26 @@ class DecisionRead(ReadModel):
     rules_evaluated: list[dict[str, Any]]
     explanation: str
     decided_by: str
+    reviewer: str | None = None
     created_at: datetime
+
+
+class DecisionLogRow(BaseModel):
+    """Una fila del registro: la decisión con los datos de su factura, lista para leer o exportar."""
+
+    id: int
+    created_at: datetime
+    invoice_id: int
+    invoice_number: str
+    vendor_name: str
+    amount: Money
+    currency: str
+    outcome: str
+    decided_by: str
+    reviewer: str | None
+    policy_name: str | None
+    failed_rules: list[str]
+    explanation: str
 
 
 # --- Documents -------------------------------------------------------------
@@ -208,6 +227,13 @@ class DocumentRead(ReadModel):
     created_at: datetime
 
 
+class TextDocumentCreate(BaseModel):
+    """Texto de un correo o mensaje de chat con un cobro."""
+
+    text: str = Field(min_length=20, max_length=20000)
+    source: Literal["email", "chat"] = "email"
+
+
 class InvoiceDetail(InvoiceRead):
     vendor: VendorRead
     decisions: list[DecisionRead]
@@ -217,3 +243,12 @@ class InvoiceDetail(InvoiceRead):
 class ReviewRequest(BaseModel):
     outcome: Literal["approved", "blocked"]
     explanation: str = Field(min_length=1)
+    # Obligatorio: una aprobación sin responsable no se puede auditar después
+    reviewer: str = Field(min_length=1, max_length=100)
+
+    @field_validator("explanation", "reviewer")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("No puede estar vacío")
+        return value.strip()

@@ -30,6 +30,8 @@ class Decision(SQLModel, table=True):
     )
     explanation: str = Field(sa_column=Column(Text, nullable=False))
     decided_by: str = Field(default="agent", max_length=10)
+    # Nombre de la persona que tomó la decisión (solo decisiones humanas): trazabilidad
+    reviewer: str | None = Field(default=None, max_length=100)
     created_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), server_default=func.now(), nullable=False),

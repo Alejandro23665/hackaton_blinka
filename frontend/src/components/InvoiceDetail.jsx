@@ -44,6 +44,8 @@ const reasonText = (explanation) =>
 function DocumentPreview({ document }) {
   const url = api.documents.fileUrl(document.id)
   const isPdf = document.content_type === 'application/pdf'
+  const isText = document.content_type === 'text/plain'
+  const text = useLoad(() => (isText ? fetch(url).then((r) => r.text()) : Promise.resolve(null)), url)
   const [zoom, setZoom] = useState(false)
 
   return (
@@ -54,7 +56,7 @@ function DocumentPreview({ document }) {
           <span className="truncate" title={document.original_name}>{document.original_name}</span>
         </p>
         <div className="flex shrink-0 items-center gap-1">
-          {!isPdf && (
+          {!isPdf && !isText && (
             <button
               type="button"
               onClick={() => setZoom((z) => !z)}
@@ -76,7 +78,11 @@ function DocumentPreview({ document }) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-3 sm:p-4">
-        {isPdf ? (
+        {isText ? (
+          <pre className="h-full min-h-[200px] overflow-auto whitespace-pre-wrap break-words rounded-control border border-line bg-canvas p-4 font-mono text-[13px] leading-relaxed text-ink">
+            {text.data ?? (text.error ? 'No se pudo cargar el mensaje.' : 'Cargando…')}
+          </pre>
+        ) : isPdf ? (
           <>
             {/* Los navegadores móviles no muestran PDF incrustados: ahí se ofrece abrirlo */}
             <iframe
@@ -128,7 +134,8 @@ function DecisionPanel({ invoice }) {
         <div className="min-w-0 flex-1">
           <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.06em] text-muted">
             <Icon name={latest.decided_by === 'agent' ? 'bot' : 'user'} size={13} />
-            {latest.decided_by === 'agent' ? 'Decisión del agente' : 'Decisión humana'} · {dateTime(latest.created_at)}
+            {latest.decided_by === 'agent' ? 'Decisión del agente' : `Decisión de ${latest.reviewer ?? 'una persona'}`} ·{' '}
+            {dateTime(latest.created_at)}
           </p>
           <h3 id="decision-title" className={`mt-0.5 text-lg font-semibold tracking-tight ${v.text}`}>{v.title}</h3>
           {/* Si hay reglas incumplidas, el motivo es la lista de abajo; si no, el texto de la decisión */}
@@ -235,13 +242,25 @@ function InvoiceForm({ invoice }) {
       </div>
 
       {warnings.length > 0 && (
-        <ul className="mt-4 space-y-1.5 rounded-control bg-warning-50 px-3 py-2.5 text-xs text-warning-700">
-          {warnings.map((w) => (
-            <li key={w} className="flex gap-1.5">
-              <Icon name="alert" size={13} className="mt-px" />
-              {w}
-            </li>
-          ))}
+        <ul className="mt-4 space-y-1.5">
+          {warnings.map((raw) => {
+            // Avisos antiguos son texto suelto: se muestran como críticos, igual que los trata el agente
+            const w = typeof raw === 'string' ? { text: raw, critical: true } : raw
+            return (
+              <li
+                key={w.text}
+                className={`flex gap-1.5 rounded-control px-3 py-2 text-xs ${
+                  w.critical ? 'bg-warning-50 text-warning-700' : 'bg-surface text-muted'
+                }`}
+              >
+                <Icon name="alert" size={13} className="mt-px shrink-0" />
+                <span>
+                  <span className="font-semibold">{w.critical ? 'Duda en la lectura: ' : 'Aviso informativo: '}</span>
+                  {w.text}
+                </span>
+              </li>
+            )
+          })}
         </ul>
       )}
       <p className="mt-3 text-[11px] text-subtle">
@@ -323,7 +342,7 @@ function DetailBody({ invoice, refresh, onDeleted }) {
                   <StatusBadge status={d.outcome} size="sm" />
                   <span className="flex items-center gap-1 text-xs text-subtle">
                     <Icon name={d.decided_by === 'agent' ? 'bot' : 'user'} size={12} />
-                    {d.decided_by === 'agent' ? 'Agente' : 'Humano'} · {dateTime(d.created_at)}
+                    {d.decided_by === 'agent' ? 'Agente' : d.reviewer ?? 'Humano'} · {dateTime(d.created_at)}
                   </span>
                 </div>
                 <p className="text-[13px] text-ink">{d.explanation}</p>

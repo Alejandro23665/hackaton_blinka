@@ -20,8 +20,6 @@ class Document(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     original_name: str = Field(max_length=255)
-    # Ruta relativa a STORAGE_DIR
-    stored_path: str = Field(max_length=500)
     content_type: str = Field(max_length=100)
     size_bytes: int
     # Evita procesar dos veces el mismo archivo

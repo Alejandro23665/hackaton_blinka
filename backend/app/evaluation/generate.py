@@ -163,6 +163,9 @@ def main() -> None:
         data = case["data"]
         if data.get("not_invoice"):
             write_chart_png(path)
+        elif path.suffix == ".txt":
+            # Correo o chat: el texto tal cual llegaría y se pegaría en Blinka
+            path.write_text(data["message"], encoding="utf-8", newline="\n")
         elif path.suffix == ".png":
             write_photo_png(path, invoice_lines(manifest["company"], data))
         else:

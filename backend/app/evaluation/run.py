@@ -9,16 +9,14 @@ Uso (desde backend/):
 - agente: el flujo completo, con el modelo configurado en OPENROUTER_MODEL.
 
 Se ejecuta SIEMPRE en una base aparte (por defecto <tu_base>_eval), que se crea si no existe y se
-vacía en cada ejecución. Nunca toca tu base principal ni tus archivos subidos.
+vacía en cada ejecución. Nunca toca tu base principal.
 """
 import argparse
 import json
 import sys
-import tempfile
 import time
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
@@ -148,7 +146,7 @@ def run_case(session: Session, case: dict) -> dict:
     path = INVOICES_DIR / case["file"]
     in_context = oracle(session, case)
     started = time.perf_counter()
-    doc = documents.process_upload(session, path.read_bytes(), path.name)
+    doc = documents.process_upload(session, path.read_bytes(), path.name, is_text=path.suffix == ".txt")
     elapsed = time.perf_counter() - started
 
     result = {
@@ -265,7 +263,6 @@ def main() -> int:
 
     database = args.database or f"{make_url(settings.DATABASE_URL).database}_eval"
     url = prepare_database(database)
-    settings.STORAGE_DIR = Path(tempfile.mkdtemp(prefix="blinka-eval-"))
 
     from app.services import extractor
 

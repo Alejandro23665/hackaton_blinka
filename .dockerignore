@@ -1,0 +1,11 @@
+# Nada de secretos, dependencias locales ni artefactos en la imagen
+.env
+.git
+.claude
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+backend/.venv
+backend/storage
+frontend/node_modules
+frontend/dist

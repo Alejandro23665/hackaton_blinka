@@ -4,7 +4,7 @@ from sqlmodel import col, select
 from app.api.deps import SessionDep
 from app.models import Decision, Document, Invoice, Vendor
 from app.schemas import InvoiceCreate, InvoiceDetail, InvoiceRead, ReviewRequest
-from app.services import agent, storage
+from app.services import agent
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
@@ -86,7 +86,7 @@ def review_invoice(invoice_id: int, payload: ReviewRequest, session: SessionDep)
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Solo se pueden revisar facturas en estado 'escalated'"
         )
-    agent.review_invoice(session, invoice, payload.outcome, payload.explanation)
+    agent.review_invoice(session, invoice, payload.outcome, payload.explanation, payload.reviewer)
     return _detail(session, invoice)
 
 
@@ -106,12 +106,8 @@ def delete_invoice(invoice_id: int, session: SessionDep):
         )
     for decision in session.exec(select(Decision).where(Decision.invoice_id == invoice_id)).all():
         session.delete(decision)
-    files = []
+    # El contenido del archivo (document_files) se borra con el documento: ON DELETE CASCADE
     for document in session.exec(select(Document).where(Document.invoice_id == invoice_id)).all():
-        files.append(document.stored_path)
         session.delete(document)
     session.delete(invoice)
     session.commit()
-    # El archivo se borra solo si la base se actualizó bien
-    for path in files:
-        storage.resolve(path).unlink(missing_ok=True)

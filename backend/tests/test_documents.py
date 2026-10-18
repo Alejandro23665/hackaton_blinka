@@ -37,12 +37,6 @@ def fake_extraction(**overrides) -> ExtractedInvoice:
 
 
 @pytest.fixture
-def storage_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "STORAGE_DIR", tmp_path)
-    return tmp_path
-
-
-@pytest.fixture
 def extract(monkeypatch):
     """Permite fijar qué devuelve el extractor en cada test."""
     state = {"result": fake_extraction(), "calls": 0}
@@ -61,7 +55,7 @@ def upload(client, content=PDF, name="factura.pdf"):
     return client.post("/documents", files={"file": (name, content, "application/octet-stream")})
 
 
-def test_upload_known_vendor_creates_and_approves_invoice(client, storage_dir, extract):
+def test_upload_known_vendor_creates_and_approves_invoice(client, extract):
     client.put("/exchange-rates/PEN", json={"usd_per_unit": 0.27})  # 472 PEN = 127,44 USD
     client.post("/policies", json=POLICY)
     client.post("/vendors", json={"name": "acme suministros"})  # coincide por nombre
@@ -73,8 +67,7 @@ def test_upload_known_vendor_creates_and_approves_invoice(client, storage_dir, e
     assert doc["content_type"] == "application/pdf"
     assert doc["extraction"]["data"]["total_amount"] == 472.0
 
-    # El archivo quedó guardado en local y se puede descargar
-    assert len(list(storage_dir.rglob("*.pdf"))) == 1
+    # El archivo quedó guardado (en Postgres) y se puede descargar tal cual
     file_response = client.get(f"/documents/{doc['id']}/file")
     assert file_response.status_code == 200
     assert file_response.content == PDF
@@ -90,7 +83,7 @@ def test_upload_known_vendor_creates_and_approves_invoice(client, storage_dir, e
     assert "472,00 PEN = 127,44 USD" in rules["currency_conversion"]["detail"]
 
 
-def test_unknown_vendor_is_created_pending_and_invoice_escalated(client, storage_dir, extract):
+def test_unknown_vendor_is_created_pending_and_invoice_escalated(client, extract):
     client.post("/policies", json=POLICY)
     extract["result"] = fake_extraction(vendor_name="Nuevo Proveedor SAC", vendor_tax_id="20999")
 
@@ -106,20 +99,22 @@ def test_unknown_vendor_is_created_pending_and_invoice_escalated(client, storage
     assert vendor["needs_review"] is False
 
 
-def test_missing_due_date_uses_issue_date_and_escalates(client, storage_dir, extract):
+def test_missing_due_date_uses_issue_date_and_is_only_informative(client, extract):
+    client.put("/exchange-rates/PEN", json={"usd_per_unit": 0.27})
     client.post("/policies", json=POLICY)
     client.post("/vendors", json={"name": "ACME Suministros"})
     extract["result"] = fake_extraction(due_date=None, confidence=0.95)
 
     doc = upload(client, PNG, "foto.png").json()
     assert doc["content_type"] == "image/png"
-    assert any("vencimiento" in w for w in doc["extraction"]["warnings"])
+    warning = next(w for w in doc["extraction"]["warnings"] if "vencimiento" in w["text"])
+    assert warning["critical"] is False
     invoice = client.get(f"/invoices/{doc['invoice_id']}").json()
     assert invoice["due_date"] == "2026-10-01"  # fecha de emisión
-    assert invoice["status"] == "escalated"
+    assert invoice["status"] == "approved"  # un aviso informativo no escala
 
 
-def test_extraction_error_keeps_document_as_failed(client, storage_dir, extract):
+def test_extraction_error_keeps_document_as_failed(client, extract):
     extract["result"] = ExtractionError("Falta OPENROUTER_API_KEY")
     doc = upload(client).json()
     assert doc["status"] == "failed"
@@ -128,7 +123,7 @@ def test_extraction_error_keeps_document_as_failed(client, storage_dir, extract)
     assert client.get("/documents").json()[0]["id"] == doc["id"]
 
 
-def test_failed_document_can_be_retried_with_same_file(client, storage_dir, extract):
+def test_failed_document_can_be_retried_with_same_file(client, extract):
     client.post("/policies", json=POLICY)
     extract["result"] = ExtractionError("Falta OPENROUTER_API_KEY")
     failed = upload(client).json()
@@ -142,10 +137,10 @@ def test_failed_document_can_be_retried_with_same_file(client, storage_dir, extr
     assert retried["status"] == "processed"
     assert retried["error"] is None
     assert len(client.get("/documents").json()) == 1
-    assert len(list(storage_dir.rglob("*.pdf"))) == 1
+    assert client.get(f"/documents/{retried['id']}/file").content == PDF
 
 
-def test_non_invoice_file_is_reported_as_such(client, storage_dir, extract):
+def test_non_invoice_file_is_reported_as_such(client, extract):
     extract["result"] = ExtractedInvoice(
         is_invoice=False,
         not_invoice_reason="Es una ilustración de cuatro personajes de bloques.",
@@ -158,14 +153,14 @@ def test_non_invoice_file_is_reported_as_such(client, storage_dir, extract):
     assert client.get("/invoices").json() == []
 
 
-def test_non_invoice_detected_even_if_model_skips_the_flag(client, storage_dir, extract):
+def test_non_invoice_detected_even_if_model_skips_the_flag(client, extract):
     # Modelo que no rellena is_invoice pero no encontró nada y lo explica en los avisos
     extract["result"] = ExtractedInvoice(confidence=0, warnings=["El archivo es una captura de un chat."])
     doc = upload(client, PNG, "chat.png").json()
     assert doc["error"] == "El archivo no es una factura ni una boleta: El archivo es una captura de un chat."
 
 
-def test_missing_key_fields_fail_without_creating_invoice(client, storage_dir, extract):
+def test_missing_key_fields_fail_without_creating_invoice(client, extract):
     extract["result"] = fake_extraction(total_amount=None, invoice_number=None)
     doc = upload(client).json()
     assert doc["status"] == "failed"
@@ -173,7 +168,7 @@ def test_missing_key_fields_fail_without_creating_invoice(client, storage_dir, e
     assert client.get("/invoices").json() == []
 
 
-def test_duplicates(client, storage_dir, extract):
+def test_duplicates(client, extract):
     client.post("/policies", json=POLICY)
     first = upload(client).json()
     # Mismo archivo -> 409 y no se vuelve a llamar al modelo
@@ -196,7 +191,7 @@ def test_duplicates(client, storage_dir, extract):
     assert dup_rule["passed"] is True
 
 
-def test_rejects_unsupported_and_empty_files(client, storage_dir, extract):
+def test_rejects_unsupported_and_empty_files(client, extract):
     assert upload(client, b"hola", "nota.txt").status_code == 415
     assert upload(client, b"", "vacio.pdf").status_code == 422
     assert extract["calls"] == 0
@@ -258,7 +253,7 @@ def test_extractor_does_not_retry_client_errors_and_sends_fallbacks(monkeypatch)
     assert calls[0]["models"] == [settings.OPENROUTER_MODEL, "a/uno", "b/dos"]
 
 
-def test_cleanup_removes_uploads_but_keeps_manual_data(client, engine, storage_dir, extract):
+def test_cleanup_removes_uploads_but_keeps_manual_data(client, engine, extract):
     from sqlmodel import Session
 
     from app import cleanup
@@ -274,7 +269,7 @@ def test_cleanup_removes_uploads_but_keeps_manual_data(client, engine, storage_d
 
     with Session(engine) as session:
         p = cleanup.plan(session)
-        assert len(p["documents"]) == 1 and len(p["invoices"]) == 1 and len(p["files"]) == 1
+        assert len(p["documents"]) == 1 and len(p["invoices"]) == 1
         assert [v.name for v in p["vendors"]] == ["ACME Suministros"]
         cleanup.execute(session, p)
 
@@ -282,18 +277,18 @@ def test_cleanup_removes_uploads_but_keeps_manual_data(client, engine, storage_d
     assert [i["id"] for i in client.get("/invoices").json()] == [manual["id"]]
     assert [v["name"] for v in client.get("/vendors").json()] == ["Manual SA"]
     assert client.get("/policies/active").status_code == 200
-    assert list(storage_dir.rglob("*.pdf")) == []
+    assert client.get(f"/documents/{doc['id']}/file").status_code == 404
 
 
-def test_deleting_invoice_removes_its_uploaded_file(client, storage_dir, extract):
+def test_deleting_invoice_removes_its_uploaded_file(client, extract):
     client.post("/policies", json=POLICY)  # sin tipo de cambio de PEN -> la factura queda escalada
     doc = upload(client).json()
     assert client.get(f"/invoices/{doc['invoice_id']}").json()["status"] == "escalated"
-    assert len(list(storage_dir.rglob("*.pdf"))) == 1
+    assert client.get(f"/documents/{doc['id']}/file").content == PDF
 
     assert client.delete(f"/invoices/{doc['invoice_id']}").status_code == 204
     assert client.get("/documents").json() == []
-    assert list(storage_dir.rglob("*.pdf")) == []
+    assert client.get(f"/documents/{doc['id']}/file").status_code == 404
 
 
 def test_extractor_retries_when_model_returns_no_json(monkeypatch):
@@ -310,3 +305,48 @@ def test_extractor_gives_up_after_repeated_bad_format(monkeypatch):
     _patch_http(monkeypatch, [_FakeResponse(200, garbage), _FakeResponse(200, garbage)])
     with pytest.raises(ExtractionError, match="tras 2 intentos"):
         extractor.extract_invoice(PDF, "application/pdf", "f.pdf")
+
+
+EMAIL = """De: Ana <ana@correo.co>
+Asunto: Cuenta de cobro AR-9
+Cuenta de cobro AR-9 por 472 PEN. Gracias."""
+
+
+def test_text_from_email_follows_the_same_flow(client, extract):
+    client.put("/exchange-rates/PEN", json={"usd_per_unit": 0.27})
+    client.post("/policies", json=POLICY)
+    client.post("/vendors", json={"name": "ACME Suministros"})
+    seen = {}
+
+    def capture(data, content_type, filename):
+        seen.update(content_type=content_type, text=data.decode())
+        return fake_extraction(), {"model": "test", "usage": None}
+
+    extractor.extract_invoice = capture  # monkeypatch ya restaurado por el fixture extract
+    response = client.post("/documents/text", json={"text": EMAIL, "source": "email"})
+    assert response.status_code == 201, response.text
+    doc = response.json()
+    assert doc["content_type"] == "text/plain" and doc["original_name"].startswith("correo-")
+    assert seen["content_type"] == "text/plain" and "AR-9" in seen["text"]
+    assert client.get(f"/invoices/{doc['invoice_id']}").json()["status"] == "approved"
+    file_response = client.get(f"/documents/{doc['id']}/file")
+    assert "charset=utf-8" in file_response.headers["content-type"] and "AR-9" in file_response.text
+
+    # El mismo texto otra vez -> 409; texto demasiado corto -> 422
+    assert client.post("/documents/text", json={"text": EMAIL}).status_code == 409
+    assert client.post("/documents/text", json={"text": "hola"}).status_code == 422
+
+
+def test_chat_without_invoice_is_reported(client, extract):
+    extract["result"] = ExtractedInvoice(is_invoice=False, not_invoice_reason="Es un saludo para quedar mañana", confidence=0)
+    doc = client.post("/documents/text", json={"text": "Hola! quedamos mañana a las 10 en la oficina?", "source": "chat"}).json()
+    assert doc["status"] == "failed" and doc["error"].startswith("El archivo no es una factura")
+
+
+def test_daily_free_quota_is_not_retried_and_explained(monkeypatch):
+    quota = {"error": {"code": 429, "message": "Rate limit exceeded: free-models-per-day. Add 10 credits"}}
+    calls = _patch_http(monkeypatch, [_FakeResponse(429, quota)])
+    with pytest.raises(ExtractionError) as exc:
+        extractor.extract_invoice(PDF, "application/pdf", "f.pdf")
+    assert len(calls) == 1  # no se reintenta: no se arregla en segundos
+    assert "límite diario" in str(exc.value) and "mañana" in str(exc.value)

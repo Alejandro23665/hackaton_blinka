@@ -1,13 +1,9 @@
-"""Guardado local de los archivos de facturas.
+"""Tipo y huella de los archivos de facturas.
 
-Los archivos se nombran por su hash (no por el nombre que envía el usuario) y el tipo se detecta
-por su contenido, no por la extensión ni por el Content-Type de la petición.
+El tipo se detecta por el contenido, no por la extensión ni por el Content-Type de la petición.
+El contenido se guarda en Postgres (tabla document_files), no en disco.
 """
 import hashlib
-from datetime import UTC, datetime
-from pathlib import Path
-
-from app.core.config import settings
 
 # firma inicial -> (content_type, extensión)
 _SIGNATURES = [
@@ -34,22 +30,3 @@ def detect_type(data: bytes) -> tuple[str, str]:
 
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def save(data: bytes, digest: str, extension: str) -> str:
-    """Escribe el archivo y devuelve su ruta relativa a STORAGE_DIR (con '/')."""
-    now = datetime.now(UTC)
-    relative = Path("invoices", f"{now:%Y}", f"{now:%m}", f"{digest[:16]}{extension}")
-    target = settings.STORAGE_DIR / relative
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
-    return relative.as_posix()
-
-
-def resolve(relative: str) -> Path:
-    """Ruta absoluta de un archivo guardado, sin permitir salir de STORAGE_DIR."""
-    root = settings.STORAGE_DIR.resolve()
-    path = (root / relative).resolve()
-    if not path.is_relative_to(root):
-        raise ValueError("Ruta fuera del almacenamiento")
-    return path

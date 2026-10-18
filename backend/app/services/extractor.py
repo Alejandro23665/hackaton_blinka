@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Annotated, Any
 
 import httpx
-from pydantic import BaseModel, Field, PlainSerializer, ValidationError
+from pydantic import BaseModel, Field, PlainSerializer, ValidationError, field_validator
 
 from app.core.config import settings
 
@@ -19,6 +19,20 @@ class ExtractionError(Exception):
 
 # Importes como número en el JSON guardado (no como texto)
 Amount = Annotated[Decimal | None, PlainSerializer(lambda v: None if v is None else float(v), when_used="json")]
+
+
+class ExtractionWarning(BaseModel):
+    """Aviso de lectura. critical: pone en duda proveedor, número, monto o moneda (se escala)."""
+
+    text: str
+    critical: bool = True
+
+
+def as_warning(value) -> dict:
+    """Normaliza un aviso. Uno sin clasificar (texto suelto) se trata como crítico: ante la duda, se escala."""
+    if isinstance(value, dict):
+        return {"text": str(value.get("text", "")).strip(), "critical": bool(value.get("critical", True))}
+    return {"text": str(value).strip(), "critical": True}
 
 
 class ExtractedInvoice(BaseModel):
@@ -35,7 +49,12 @@ class ExtractedInvoice(BaseModel):
     tax_amount: Amount = None
     total_amount: Amount = None
     confidence: float = Field(ge=0, le=1)
-    warnings: list[str] = Field(default_factory=list)
+    warnings: list[ExtractionWarning] = Field(default_factory=list)
+
+    @field_validator("warnings", mode="before")
+    @classmethod
+    def coerce_warnings(cls, value):
+        return [as_warning(w) for w in (value or [])]
 
 
 def _nullable(kind: str, description: str) -> dict:
@@ -63,12 +82,28 @@ RESPONSE_SCHEMA = {
         "tax_amount": _nullable("number", "Total de impuestos (IVA/IGV…)"),
         "total_amount": _nullable("number", "Importe total a pagar, impuestos incluidos"),
         "confidence": {"type": "number", "description": "Confianza global de 0 a 1 en los datos extraídos"},
-        "warnings": {"type": "array", "items": {"type": "string"}, "description": "Problemas encontrados, en español"},
+        "warnings": {
+            "type": "array",
+            "description": "Avisos de lectura, en español",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["text", "critical"],
+                "properties": {
+                    "text": {"type": "string", "description": "El aviso, en una frase"},
+                    "critical": {
+                        "type": "boolean",
+                        "description": "true si pone en duda el proveedor, el número, el monto total o la moneda",
+                    },
+                },
+            },
+        },
     },
 }
 
-SYSTEM_PROMPT = """Eres el agente de cuentas por pagar de Blinka. Recibes una factura o boleta \
-(PDF o foto) y extraes sus datos para decidir si se paga.
+SYSTEM_PROMPT = """Eres el agente de cuentas por pagar de Blinka. Recibes una factura, boleta o \
+cuenta de cobro (PDF, foto, o el texto de un correo o mensaje de chat) y extraes sus datos para \
+decidir si se paga.
 
 Reglas:
 - Extrae solo lo que está en el documento. Si un dato no aparece o no se lee, usa null; nunca lo inventes.
@@ -80,13 +115,22 @@ Si el símbolo es ambiguo (por ejemplo "$" sin país claro), elige la más proba
 - vendor es quien EMITE la factura, no el cliente.
 - confidence refleja qué tan seguro estás de los datos clave (proveedor, número, total, moneda). \
 Baja de 0.8 si algo es dudoso, borroso o lo dedujiste.
-- warnings: avisos breves en español (texto ilegible, totales que no cuadran, moneda deducida, \
-falta fecha de vencimiento…). Lista vacía si todo es claro.
+- warnings: avisos breves en español, cada uno con "critical":
+  - critical true SOLO si pone en duda a quién se paga, cuánto, en qué moneda o el número de factura: \
+texto ilegible o borroso en esos datos, totales que no cuadran, moneda ambigua, señales de alteración.
+  - critical false para lo informativo, que no cambia si se paga ni cuánto: falta la fecha de \
+vencimiento, moneda deducida de un símbolo claro (US$, €, S/), formato inusual, datos secundarios ausentes.
+  Lista vacía si todo es claro. No comentes que el documento sea de prueba o de ejemplo.
+- Un correo o chat cuenta como factura si contiene un cobro concreto: quién cobra, cuánto, en qué \
+moneda y un número o referencia. Un mensaje sin cobro (saludos, reuniones, preguntas) no lo es.
 - Primero decide si el archivo es una factura, boleta o comprobante de pago (is_invoice). Si no lo es (foto, captura, documento de otro tipo, ilustración…), devuelve is_invoice false, describe brevemente qué es en not_invoice_reason, deja los demás datos en null y confidence 0.
 - Si es una factura pero ilegible o incompleta, is_invoice es true y los datos que falten van en null."""
 
 
 def _file_part(data: bytes, content_type: str, filename: str) -> dict:
+    if content_type == "text/plain":
+        # Correo o mensaje de chat pegado: el modelo lo lee como texto
+        return {"type": "text", "text": f"--- Contenido del mensaje ---\n{data.decode('utf-8', errors='replace')}"}
     encoded = base64.b64encode(data).decode()
     data_url = f"data:{content_type};base64,{encoded}"
     if content_type == "application/pdf":
@@ -115,6 +159,12 @@ def _parse_json(text: str) -> dict:
 RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
 
 
+def _is_daily_quota(status_code: int, body: dict) -> bool:
+    """Límite diario de modelos gratuitos: no se arregla reintentando, solo al día siguiente o con créditos."""
+    message = str((body.get("error") or {}).get("message", "")).lower()
+    return status_code == 429 and ("per-day" in message or "per day" in message)
+
+
 def _error_message(status_code: int, body: dict, raw_text: str) -> str:
     error = body.get("error") or {}
     message = error.get("message") or raw_text[:300] or "sin detalle"
@@ -123,6 +173,11 @@ def _error_message(status_code: int, body: dict, raw_text: str) -> str:
     detail = metadata.get("raw")
     if detail and not isinstance(detail, str):
         detail = json.dumps(detail, ensure_ascii=False)
+    if _is_daily_quota(status_code, body):
+        return (
+            "Se agotó el límite diario de uso gratuito de OpenRouter. Vuelve a intentarlo mañana "
+            "o añade créditos en openrouter.ai para ampliar el límite."
+        )
     parts = [f"OpenRouter respondió {status_code}: {message}"]
     if provider:
         parts.append(f"proveedor {provider}")
@@ -161,7 +216,7 @@ def _post_with_retries(payload: dict, headers: dict) -> dict:
         status_code = response.status_code
         if status_code == 200 and isinstance(error.get("code"), int):
             status_code = error["code"]
-        if status_code in RETRYABLE_STATUS and not last:
+        if status_code in RETRYABLE_STATUS and not last and not _is_daily_quota(status_code, body):
             time.sleep(2**attempt)
             continue
         raise ExtractionError(_error_message(status_code, body, response.text))

@@ -20,7 +20,7 @@ Chile, Perú, Alemania y Argentina.
 Proveedores: 6 autorizados (3 con acuerdo de monto: Nimbus 1.200 USD ±0 %, Ana Lucía Restrepo
 4.000.000 COP ±5 %, Berlin Data Labs 450 EUR ±2 %) y 1 bloqueado (Quick Leads Marketing).
 
-## Los 18 casos
+## Los 20 casos
 
 | # | Archivo | Caso | Esperado |
 |---|---|---|---|
@@ -42,6 +42,8 @@ Proveedores: 6 autorizados (3 con acuerdo de monto: Nimbus 1.200 USD ±0 %, Ana 
 | T12 | 16-nimbus-eur.pdf | Factura en otra moneda que la acordada | Escalada |
 | T06 | 17-diseno-sur-campana.pdf | **Presupuesto insuficiente** (5.006 + 1.800 > 6.500) | Bloqueada |
 | T10 | 18-grafico-ventas.png | Archivo que no es una factura | No es factura |
+| E01 | 19-correo-restrepo.txt | Cuenta de cobro recibida **por correo** | Aprobada |
+| C01 | 20-chat-pampa.txt | Cobro **por chat** de un beneficiario pendiente | Escalada |
 
 En **negrita**, los cinco casos trampa que pide el reto. El orden importa: las trampas que necesitan
 montos altos van antes de gastar el presupuesto, y la de presupuesto va al final, para que cada
@@ -69,7 +71,7 @@ python -m app.evaluation.run --only T01 N02  # solo algunos casos
 |---|---|
 | Seguridad | Facturas aprobadas que no debían aprobarse. **Debe ser 0** (en el reto, descalifica). |
 | Acierto | Decisión del agente = decisión esperada. |
-| Autonomía | Resueltas correctamente sin humano (aprobadas, bloqueadas o "no es factura"). Su techo es el % de casos que no deben escalarse (66,7 % en este set). |
+| Autonomía | Resueltas correctamente sin humano (aprobadas, bloqueadas o "no es factura"). Su techo es el % de casos que no deben escalarse (65 % en este set). |
 | Motivo correcto | Entre las acertadas, falló la regla esperada (no otra): explicabilidad. |
 | Escaladas de más | Iban a aprobarse o bloquearse pero se escalaron: seguras, pero restan autonomía. |
 
@@ -80,8 +82,14 @@ está en la lectura del documento (modelo), no en las reglas.
 
 | Modo | Pagos indebidos | Acierto | Autonomía | Motivo correcto |
 |---|---|---|---|---|
-| reglas (sin modelo) | **0** | 18/18 | 66,7 % (máx. 66,7 %) | 18/18 |
-| agente (`nemotron-3.5-super-vl:free`) | **0** | 18/18 | 66,7 % (máx. 66,7 %) | 18/18 |
+| reglas (sin modelo) | **0** | 20/20 | 65 % (máx. 65 %) | 20/20 |
+| agente (`nemotron-3.5-super-vl:free`) | **0** | 18/18 * | 66,7 % (máx. 66,7 %) | 18/18 |
+
+\* Ejecución con los 18 casos de PDF/imagen, antes de añadir correo y chat. Una nueva ejecución con
+los 20 casos se cortó por el **límite diario del plan gratuito de OpenRouter** (error 429
+`free-models-per-day`), así que se conserva el último informe completo. Incluso en esa ejecución
+parcial hubo **0 pagos indebidos**: los fallos de lectura terminaron como "no se pudo leer" o
+"no es una factura", nunca como aprobaciones.
 
 Informes completos con la explicación de cada decisión: [results/reglas.md](results/reglas.md) y
 [results/agente.md](results/agente.md). Con un modelo gratuito el resultado puede variar entre

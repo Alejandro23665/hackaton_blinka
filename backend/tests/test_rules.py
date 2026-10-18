@@ -281,3 +281,25 @@ def test_explanation_does_not_repeat_the_same_reason():
     policy = make_policy(allowed_currencies=["USD", "MXN"])
     result = evaluate(make_invoice("10", "MXN"), ACME, policy, Decimal("0"), rates=RATES)
     assert result.explanation.count("falta el tipo de cambio de MXN a USD") == 1
+
+
+def test_informative_warnings_do_not_escalate():
+    extraction = {"confidence": 0.95, "warnings": [{"text": "La factura no indica fecha de vencimiento", "critical": False}]}
+    result = evaluate(make_invoice("500"), ACME, make_policy(), Decimal("0"), extraction=extraction, rates=RATES)
+    assert result.outcome == "approved"
+    rule = next(r for r in result.rules if r.rule == "document_extraction")
+    assert rule.passed and "avisos informativos" in rule.detail
+
+
+def test_critical_warnings_escalate():
+    extraction = {"confidence": 0.95, "warnings": [{"text": "El total está borroso", "critical": True}]}
+    result = evaluate(make_invoice("500"), ACME, make_policy(), Decimal("0"), extraction=extraction, rates=RATES)
+    assert result.outcome == "escalated"
+    assert "Lectura con dudas: El total está borroso" in result.explanation
+
+
+def test_unclassified_warning_is_treated_as_critical():
+    """Avisos antiguos (texto suelto) o sin clasificar: ante la duda, se escala."""
+    extraction = {"confidence": 0.95, "warnings": ["Algo raro en el documento"]}
+    result = evaluate(make_invoice("500"), ACME, make_policy(), Decimal("0"), extraction=extraction, rates=RATES)
+    assert result.outcome == "escalated"

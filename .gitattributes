@@ -4,3 +4,5 @@
 *.jpg binary
 *.jpeg binary
 *.webp binary
+# Mensajes del set: siempre LF para que el contenido (y su hash) sea idéntico en cualquier sistema
+dataset/invoices/*.txt text eol=lf

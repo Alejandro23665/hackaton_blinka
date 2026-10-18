@@ -6,7 +6,10 @@ Agente que revisa facturas y decide si pagarlas, bloquearlas o escalarlas según
 
 ```
 hackaton_blinka/
-├── docker-compose.yml        # PostgreSQL 16
+├── Dockerfile                # Imagen de despliegue (API + frontend)
+├── render.yaml / railway.json # Configuración de Render y Railway
+├── docker-compose.yml        # PostgreSQL 16 para desarrollo
+├── dataset/                  # Set de evaluación (empresa ficticia, facturas, resultados)
 ├── .env.example
 ├── docs/                     # Diseño: datos, reglas, API y subida de facturas
 ├── backend/
@@ -22,14 +25,15 @@ hackaton_blinka/
 │       ├── models/           # Tablas SQLModel
 │       ├── schemas/          # DTOs de la API
 │       ├── api/              # Routers
-│       ├── services/         # Reglas, agente, extracción (OpenRouter) y almacenamiento
-│   └── storage/              # Facturas subidas (local, ignorado por git)
-│       └── seed.py           # Datos de ejemplo para la demo
+│       ├── services/         # Reglas, agente, extracción (OpenRouter) y conversión de monedas
+│       ├── evaluation/       # Generador del set y evaluación del agente
+│       ├── demo.py           # Carga la empresa ficticia de la demo
+│       └── cleanup.py        # Limpia las facturas subidas
 └── frontend/                 # React + Vite + Tailwind
     └── src/
         ├── api.js            # Cliente de la API
         ├── components/       # UI, detalle de factura, reglas, revisión
-        └── views/            # Panel, Facturas, Proveedores, Políticas
+        └── views/            # Panel, Facturas, Proveedores, Políticas, Registro
 ```
 
 ## Puesta en marcha
@@ -43,7 +47,7 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows  (Linux/Mac: source .venv/bin/activate)
 pip install -r requirements.txt
 alembic upgrade head
-python -m app.seed               # opcional: datos de ejemplo
+python -m app.demo               # opcional: empresa ficticia de la demo
 uvicorn app.main:app --reload    # http://localhost:8000/docs
 ```
 
@@ -60,6 +64,11 @@ Para que el agente lea facturas subidas, añade tu clave de OpenRouter en `.env`
 [docs/03-document-upload.md](docs/03-document-upload.md).
 
 El frontend usa `VITE_API_URL` (por defecto `http://localhost:8000`); ver `frontend/.env.example`.
+
+## Despliegue
+
+Un solo servicio Docker (API + frontend) y una base PostgreSQL, en **Railway** o **Render**.
+Guía paso a paso en [docs/04-despliegue.md](docs/04-despliegue.md).
 
 ## Evaluación (set de facturas simuladas)
 
@@ -81,9 +90,23 @@ Usa una base aparte (`<tu base>_eval`) y deja el informe en `dataset/results/`.
 > cuesta autonomía, no pagos indebidos. Más en
 > [dataset/README.md](dataset/README.md#sobre-el-modelo-de-lectura-limitaciones-conocidas).
 
+## Demo (datos ficticios)
+
+El reto prohíbe datos reales. Para presentar, carga la empresa ficticia **Andes Digital LLC**
+(la misma del set de evaluación):
+
+```bash
+cd backend
+python -m app.demo --reset   # BORRA todos los datos y archivos, y carga la empresa de la demo
+```
+
+Después sube en directo, en el orden que indica el comando, los archivos de `dataset/invoices`
+(PDF, foto, correo y chat). Los `.txt` se pegan en **Recibir factura → Correo o chat**.
+Sin `--reset` solo añade la política, los tipos de cambio y los proveedores que falten.
+
 ## Limpiar facturas subidas
 
-Borra los archivos de `backend/storage` y lo que se creó a partir de ellos (documentos,
+Borra las facturas subidas (guardadas en Postgres) y lo que se creó a partir de ellas (documentos,
 facturas, decisiones y proveedores que creó el agente). No toca políticas, proveedores
 creados a mano ni facturas ingresadas manualmente.
 

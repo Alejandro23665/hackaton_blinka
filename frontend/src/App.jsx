@@ -6,6 +6,7 @@ import { useLoad } from './hooks'
 import Dashboard from './views/Dashboard'
 import Invoices from './views/Invoices'
 import Policies from './views/Policies'
+import Registry from './views/Registry'
 import Vendors from './views/Vendors'
 
 const TABS = [
@@ -13,6 +14,7 @@ const TABS = [
   { id: 'invoices', label: 'Facturas', icon: 'file', View: Invoices },
   { id: 'vendors', label: 'Proveedores', icon: 'store', View: Vendors },
   { id: 'policies', label: 'Políticas', icon: 'shield', View: Policies },
+  { id: 'registry', label: 'Registro', icon: 'list', View: Registry },
 ]
 
 function Logo() {
@@ -58,7 +60,7 @@ function Nav({ tab, setTab, className = '', compact = false }) {
   return (
     <nav
       aria-label="Secciones"
-      className={`gap-1 border border-line bg-surface p-1 ${compact ? 'grid grid-cols-4 rounded-[16px] sm:flex sm:rounded-full' : 'flex rounded-full'} ${className}`}
+      className={`gap-1 border border-line bg-surface p-1 ${compact ? 'grid grid-cols-5 rounded-[16px] sm:flex sm:rounded-full' : 'flex rounded-full'} ${className}`}
     >
       {TABS.map((t) => {
         const active = tab === t.id
@@ -97,10 +99,10 @@ export default function App() {
       <header className="sticky top-0 z-10 border-b border-line bg-canvas/90 backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
           <Logo />
-          <Nav tab={tab} setTab={setTab} className="hidden lg:flex" />
+          <Nav tab={tab} setTab={setTab} className="hidden xl:flex" />
           <SystemStatus version={version} />
         </div>
-        <div className="px-4 pb-3 sm:px-6 lg:hidden">
+        <div className="px-4 pb-3 sm:px-6 xl:hidden">
           <Nav tab={tab} setTab={setTab} compact className="w-full" />
         </div>
       </header>

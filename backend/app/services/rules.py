@@ -52,17 +52,31 @@ def check_vendor_allowed(vendor: Vendor) -> RuleResult:
     return RuleResult("vendor_allowed", False, HARD, f"{vendor.name} no está autorizado")
 
 
+def _warning_texts(warnings: list) -> str:
+    return "; ".join(w["text"].rstrip(".") for w in warnings)
+
+
 def check_extraction(extraction: dict, min_confidence: float) -> RuleResult:
+    """Escala si la lectura es poco fiable: baja confianza o avisos críticos (dudas sobre a quién,
+    cuánto, moneda o número). Los avisos informativos se muestran pero no escalan."""
+    from app.services.extractor import as_warning
+
     confidence = float(extraction.get("confidence") or 0)
-    warnings = extraction.get("warnings") or []
+    warnings = [as_warning(w) for w in extraction.get("warnings") or []]
+    critical = [w for w in warnings if w["critical"]]
+    info = [w for w in warnings if not w["critical"]]
     pct = f"{confidence:.0%}"
     if confidence < min_confidence:
         detail = f"Confianza de lectura {pct} (mínimo {min_confidence:.0%})"
-    elif warnings:
-        detail = "Lectura con avisos: " + "; ".join(w.strip().rstrip(".") for w in warnings) + "."
-    else:
-        return RuleResult("document_extraction", True, SOFT, f"Datos leídos del documento con confianza {pct}")
-    return RuleResult("document_extraction", False, SOFT, detail)
+        if critical:
+            detail += f"; avisos: {_warning_texts(critical)}"
+        return RuleResult("document_extraction", False, SOFT, detail)
+    if critical:
+        return RuleResult("document_extraction", False, SOFT, f"Lectura con dudas: {_warning_texts(critical)}")
+    detail = f"Datos leídos del documento con confianza {pct}"
+    if info:
+        detail += f" (avisos informativos: {_warning_texts(info)})"
+    return RuleResult("document_extraction", True, SOFT, detail)
 
 
 STATUS_LABELS = {

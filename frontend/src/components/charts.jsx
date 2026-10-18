@@ -54,7 +54,8 @@ export function SpendChart({ points, height = 220, currency }) {
   const innerW = Math.max(0, width - pad.left - pad.right)
   const innerH = height - pad.top - pad.bottom
   const known = points.filter((p) => p.cumulative != null)
-  const yMax = niceMax(Math.max(...known.map((p) => p.cumulative), 0) * 1.1)
+  // Sin gasto todavía: escala redonda (0–1.000) en lugar de fracciones sin sentido
+  const yMax = niceMax(Math.max(...known.map((p) => p.cumulative), 0) * 1.1 || 1000)
   const step = points.length > 1 ? innerW / (points.length - 1) : 0
   const x = (i) => pad.left + i * step
   const y = (v) => pad.top + innerH - (v / yMax) * innerH

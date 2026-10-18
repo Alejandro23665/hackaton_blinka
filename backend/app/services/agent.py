@@ -113,7 +113,9 @@ def evaluate_invoice(session: Session, invoice: Invoice) -> Decision:
     return decision
 
 
-def review_invoice(session: Session, invoice: Invoice, outcome: str, explanation: str) -> Decision:
+def review_invoice(
+    session: Session, invoice: Invoice, outcome: str, explanation: str, reviewer: str
+) -> Decision:
     """Decisión humana sobre una factura escalada. No vuelve a aplicar las reglas."""
     decision = Decision(
         invoice_id=invoice.id,
@@ -122,6 +124,7 @@ def review_invoice(session: Session, invoice: Invoice, outcome: str, explanation
         rules_evaluated=[],
         explanation=explanation,
         decided_by="human",
+        reviewer=reviewer,
     )
     invoice.status = outcome
     session.add_all([decision, invoice])

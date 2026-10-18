@@ -6,7 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.orm.attributes import flag_modified
 from sqlmodel import Session, select
 
-from app.models import Document, Invoice, Vendor
+from app.models import Document, DocumentFile, Invoice, Vendor
 from app.services import agent, extractor, storage
 from app.schemas import normalize_tax_id
 from app.services.extractor import ExtractedInvoice, ExtractionError
@@ -54,8 +54,9 @@ def _fail(session: Session, document: Document, message: str) -> Document:
     return document
 
 
-def process_upload(session: Session, data: bytes, original_name: str) -> Document:
-    content_type, extension = storage.detect_type(data)
+def process_upload(session: Session, data: bytes, original_name: str, *, is_text: bool = False) -> Document:
+    """Procesa un archivo (PDF/imagen) o, con is_text, el texto de un correo o chat."""
+    content_type = "text/plain" if is_text else storage.detect_type(data)[0]
     digest = storage.sha256(data)
 
     existing = session.exec(select(Document).where(Document.sha256 == digest)).first()
@@ -67,18 +68,19 @@ def process_upload(session: Session, data: bytes, original_name: str) -> Documen
         document = existing
         document.original_name = original_name[:255]
         document.status, document.error, document.extraction = "processing", None, None
-        if not storage.resolve(document.stored_path).is_file():
-            document.stored_path = storage.save(data, digest, extension)
+        session.add(document)
     else:
         document = Document(
             original_name=original_name[:255],
-            stored_path=storage.save(data, digest, extension),
             content_type=content_type,
             size_bytes=len(data),
             sha256=digest,
             status="processing",
         )
-    session.add(document)
+        session.add(document)
+        session.flush()
+    if session.get(DocumentFile, document.id) is None:
+        session.add(DocumentFile(document_id=document.id, content=data))
     session.commit()
     session.refresh(document)
 
@@ -88,7 +90,7 @@ def process_upload(session: Session, data: bytes, original_name: str) -> Documen
     except ExtractionError as exc:
         return _fail(session, document, str(exc))
 
-    warnings = list(extracted.warnings)
+    warnings = [w.model_dump() for w in extracted.warnings]
     extraction = {
         **meta,
         "data": extracted.model_dump(mode="json"),
@@ -101,7 +103,7 @@ def process_upload(session: Session, data: bytes, original_name: str) -> Documen
     #    clave y no confía en la lectura, también se trata como "no es una factura".
     missing = _missing_fields(extracted)
     if not extracted.is_invoice or (len(missing) == 4 and extracted.confidence < 0.2):
-        reason = extracted.not_invoice_reason or (warnings[0] if warnings else None)
+        reason = extracted.not_invoice_reason or (warnings[0]["text"] if warnings else None)
         message = "El archivo no es una factura ni una boleta"
         return _fail(session, document, f"{message}: {reason.rstrip('.')}." if reason else f"{message}.")
     if missing:
@@ -115,10 +117,12 @@ def process_upload(session: Session, data: bytes, original_name: str) -> Documen
     due_date = extracted.due_date
     if due_date is None:
         due_date = extracted.issue_date or datetime.now(UTC).date()
-        warnings.append(
-            "La factura no indica fecha de vencimiento; se usó "
-            + ("la fecha de emisión." if extracted.issue_date else "la fecha de hoy.")
-        )
+        # Informativo: no cambia a quién se paga ni cuánto (no escala por sí solo)
+        warnings.append({
+            "text": "La factura no indica fecha de vencimiento; se usó "
+            + ("la fecha de emisión." if extracted.issue_date else "la fecha de hoy."),
+            "critical": False,
+        })
 
     # 2. Proveedor y duplicados
     tax_id = normalize_tax_id(extracted.vendor_tax_id)

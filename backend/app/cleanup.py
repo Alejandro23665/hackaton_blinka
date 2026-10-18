@@ -5,7 +5,7 @@ Uso (desde backend/):
     python -m app.cleanup --dry-run  # solo muestra, no borra nada
     python -m app.cleanup --yes      # borra sin preguntar
 
-Borra: archivos de STORAGE_DIR/invoices, documentos, las facturas creadas desde esos documentos,
+Borra: documentos (con su archivo), las facturas creadas desde esos documentos,
 sus decisiones y los proveedores que creó el agente (si ya no tienen otras facturas).
 No toca: políticas, proveedores creados a mano ni facturas ingresadas manualmente.
 """
@@ -15,7 +15,6 @@ import sys
 from sqlalchemy import delete, func
 from sqlmodel import Session, col, select
 
-from app.core.config import settings
 from app.db.session import engine
 from app.models import Decision, Document, Invoice, Vendor
 from app.services import storage
@@ -42,15 +41,12 @@ def plan(session: Session) -> dict:
         if not others:
             vendors.append(session.get(Vendor, vendor_id))
 
-    files_dir = settings.STORAGE_DIR / "invoices"
-    files = [f for f in files_dir.rglob("*") if f.is_file()] if files_dir.exists() else []
-    return {"documents": documents, "invoices": invoices, "vendors": vendors, "files": files}
+    return {"documents": documents, "invoices": invoices, "vendors": vendors}
 
 
 def describe(p: dict) -> None:
-    size_kb = sum(f.stat().st_size for f in p["files"]) / 1024
-    print(f"Archivos en {settings.STORAGE_DIR / 'invoices'}: {len(p['files'])} ({size_kb:,.0f} KB)")
-    print(f"Documentos: {len(p['documents'])}")
+    size_kb = sum(d.size_bytes for d in p["documents"]) / 1024
+    print(f"Documentos: {len(p['documents'])} ({size_kb:,.0f} KB)")
     for d in p["documents"]:
         print(f"  - {d.original_name} [{d.status}]")
     print(f"Facturas creadas desde documentos: {len(p['invoices'])}")
@@ -65,21 +61,12 @@ def execute(session: Session, p: dict) -> None:
     invoice_ids = [inv.id for inv in p["invoices"]]
     if invoice_ids:
         session.exec(delete(Decision).where(col(Decision.invoice_id).in_(invoice_ids)))
-    session.exec(delete(Document))
+    session.exec(delete(Document))  # su archivo (document_files) se borra en cascada
     if invoice_ids:
         session.exec(delete(Invoice).where(col(Invoice.id).in_(invoice_ids)))
     for vendor in p["vendors"]:
         session.delete(vendor)
     session.commit()
-
-    # Los archivos se borran solo si la base se limpió bien
-    for f in p["files"]:
-        f.unlink(missing_ok=True)
-    root = settings.STORAGE_DIR / "invoices"
-    if root.exists():
-        for folder in sorted((d for d in root.rglob("*") if d.is_dir()), reverse=True):
-            if not any(folder.iterdir()):
-                folder.rmdir()
 
 
 def main() -> int:
@@ -91,7 +78,7 @@ def main() -> int:
     with Session(engine) as session:
         p = plan(session)
         describe(p)
-        if not (p["documents"] or p["files"]):
+        if not p["documents"]:
             print("\nNo hay nada que limpiar.")
             return 0
         if args.dry_run:

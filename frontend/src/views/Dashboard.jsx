@@ -282,7 +282,7 @@ function RecentDecisions({ decisions, invoiceNumber, openInvoice }) {
                   <span className="mt-0.5 line-clamp-2 block text-xs text-muted">{d.explanation}</span>
                   <span className="mt-1 flex items-center gap-1 text-[11px] text-subtle">
                     <Icon name={d.decided_by === 'agent' ? 'bot' : 'user'} size={12} />
-                    {d.decided_by === 'agent' ? 'Agente' : 'Humano'} · {dateTime(d.created_at)}
+                    {d.decided_by === 'agent' ? 'Agente' : d.reviewer ?? 'Humano'} · {dateTime(d.created_at)}
                   </span>
                 </span>
               </button>
