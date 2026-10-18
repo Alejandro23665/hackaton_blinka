@@ -22,7 +22,7 @@ function Logo() {
     <div className="flex items-center gap-2.5">
       <img src="/logo.png" alt="" className="h-9 w-9" />
       <div className="leading-tight">
-        <p className="text-[17px] font-semibold tracking-tight text-ink">rekreuz</p>
+        <p className="text-[17px] font-semibold tracking-tight text-ink">Rekreuz</p>
         <p className="hidden text-[11px] whitespace-nowrap text-subtle sm:block">Agente de pagos</p>
       </div>
     </div>
