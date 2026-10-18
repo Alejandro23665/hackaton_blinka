@@ -1,0 +1,6 @@
+# Archivos binarios: git nunca debe convertir sus saltos de línea (un PDF con CRLF se corrompe)
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
