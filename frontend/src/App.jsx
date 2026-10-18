@@ -20,9 +20,7 @@ const TABS = [
 function Logo() {
   return (
     <div className="flex items-center gap-2.5">
-      <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-600 text-white shadow-control">
-        <Icon name="bot" size={19} strokeWidth={2} />
-      </span>
+      <img src="/logo.png" alt="" className="h-9 w-9" />
       <div className="leading-tight">
         <p className="text-[17px] font-semibold tracking-tight text-ink">rekreuz</p>
         <p className="hidden text-[11px] whitespace-nowrap text-subtle sm:block">Agente de pagos</p>
