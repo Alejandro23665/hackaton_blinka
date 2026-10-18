@@ -294,3 +294,19 @@ def test_deleting_invoice_removes_its_uploaded_file(client, storage_dir, extract
     assert client.delete(f"/invoices/{doc['invoice_id']}").status_code == 204
     assert client.get("/documents").json() == []
     assert list(storage_dir.rglob("*.pdf")) == []
+
+
+def test_extractor_retries_when_model_returns_no_json(monkeypatch):
+    garbage = {"model": "m", "choices": [{"message": {"content": "Lo siento, no puedo."}}]}
+    calls = _patch_http(monkeypatch, [_FakeResponse(200, garbage), _FakeResponse(200, _ok_body())])
+    extracted, _ = extractor.extract_invoice(PDF, "application/pdf", "f.pdf")
+    assert extracted.invoice_number == "F001-000123"
+    assert len(calls) == 2
+
+
+def test_extractor_gives_up_after_repeated_bad_format(monkeypatch):
+    garbage = {"model": "m", "choices": [{"message": {"content": "sin json"}}]}
+    monkeypatch.setattr(settings, "OPENROUTER_MAX_RETRIES", 1)
+    _patch_http(monkeypatch, [_FakeResponse(200, garbage), _FakeResponse(200, garbage)])
+    with pytest.raises(ExtractionError, match="tras 2 intentos"):
+        extractor.extract_invoice(PDF, "application/pdf", "f.pdf")

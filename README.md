@@ -61,6 +61,26 @@ Para que el agente lea facturas subidas, añade tu clave de OpenRouter en `.env`
 
 El frontend usa `VITE_API_URL` (por defecto `http://localhost:8000`); ver `frontend/.env.example`.
 
+## Evaluación (set de facturas simuladas)
+
+18 facturas ficticias de **Andes Digital LLC** con los casos trampa del reto (duplicado,
+beneficiario nuevo, no cuadra con lo acordado, supera el límite, presupuesto insuficiente…).
+Detalles en [dataset/README.md](dataset/README.md).
+
+```bash
+cd backend
+python -m app.evaluation.run                 # motor de reglas aislado (sin modelo)
+python -m app.evaluation.run --mode agente   # flujo completo con OpenRouter
+```
+
+Usa una base aparte (`<tu base>_eval`) y deja el informe en `dataset/results/`.
+
+> **Limitación conocida del MVP:** la lectura usa un modelo gratuito de OpenRouter, que puede
+> equivocarse o fallar por saturación. El diseño lo tiene en cuenta: el modelo solo extrae datos y
+> las reglas deciden; ante cualquier duda la factura se escala a una persona. Un error de lectura
+> cuesta autonomía, no pagos indebidos. Más en
+> [dataset/README.md](dataset/README.md#sobre-el-modelo-de-lectura-limitaciones-conocidas).
+
 ## Limpiar facturas subidas
 
 Borra los archivos de `backend/storage` y lo que se creó a partir de ellos (documentos,

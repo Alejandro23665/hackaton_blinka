@@ -275,3 +275,9 @@ def test_invoice_totals_tolerate_rounding_and_missing_breakdown():
     result = evaluate(make_invoice("472"), ACME, make_policy(), Decimal("0"), extraction=no_breakdown, rates=RATES)
     rule = next(r for r in result.rules if r.rule == "invoice_totals")
     assert rule.passed and "no desglosa" in rule.detail
+
+
+def test_explanation_does_not_repeat_the_same_reason():
+    policy = make_policy(allowed_currencies=["USD", "MXN"])
+    result = evaluate(make_invoice("10", "MXN"), ACME, policy, Decimal("0"), rates=RATES)
+    assert result.explanation.count("falta el tipo de cambio de MXN a USD") == 1

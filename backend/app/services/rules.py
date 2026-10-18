@@ -319,14 +319,17 @@ def evaluate(
     hard_failures = [r for r in rules if not r.passed and r.severity == HARD]
     soft_failures = [r for r in rules if not r.passed and r.severity == SOFT]
 
+    def reasons(failures: list[RuleResult]) -> str:
+        # Sin repetir: varias reglas pueden fallar por la misma causa (p. ej. falta un tipo de cambio)
+        details = list(dict.fromkeys(r.detail.rstrip(".") for r in failures))
+        return "; ".join(details) + "."
+
     if hard_failures:
         outcome = "blocked"
-        explanation = "Bloqueada: " + "; ".join(r.detail for r in hard_failures) + "."
+        explanation = "Bloqueada: " + reasons(hard_failures)
     elif soft_failures:
         outcome = "escalated"
-        explanation = (
-            "Escalada a revisión humana: " + "; ".join(r.detail for r in soft_failures) + "."
-        )
+        explanation = "Escalada a revisión humana: " + reasons(soft_failures)
     else:
         outcome = "approved"
         explanation = f"Aprobada: cumple todas las reglas de la política '{policy.name}'."

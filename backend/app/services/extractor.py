@@ -201,13 +201,19 @@ def extract_invoice(data: bytes, content_type: str, filename: str) -> tuple[Extr
         # OpenRouter prueba estos modelos en orden si el principal falla
         payload["models"] = [settings.OPENROUTER_MODEL, *fallbacks]
 
-    body = _post_with_retries(payload, headers)
-
-    try:
-        text = _message_text(body["choices"][0]["message"]["content"])
-        extracted = ExtractedInvoice.model_validate(_parse_json(text))
-    except (KeyError, IndexError, json.JSONDecodeError, ValidationError) as exc:
-        raise ExtractionError(f"Respuesta del modelo con formato inválido: {exc}") from exc
+    # Una respuesta mal formada (sin JSON, campos inválidos) suele ser pasajera: se vuelve a pedir
+    attempts = max(1, settings.OPENROUTER_MAX_RETRIES + 1)
+    for attempt in range(attempts):
+        body = _post_with_retries(payload, headers)
+        try:
+            text = _message_text(body["choices"][0]["message"]["content"])
+            extracted = ExtractedInvoice.model_validate(_parse_json(text))
+            break
+        except (KeyError, IndexError, json.JSONDecodeError, ValidationError, ExtractionError) as exc:
+            if attempt == attempts - 1:
+                raise ExtractionError(
+                    f"Respuesta del modelo con formato inválido tras {attempts} intentos: {exc}"
+                ) from exc
 
     meta = {"model": body.get("model", settings.OPENROUTER_MODEL), "usage": body.get("usage")}
     return extracted, meta

@@ -1,0 +1,215 @@
+{
+  "description": "Set de evaluación de Blinka. Empresa y proveedores ficticios (sin datos reales). Las facturas de invoices/ se generan desde este archivo con: python -m app.evaluation.generate",
+  "company": {
+    "name": "Andes Digital LLC",
+    "address": "1209 Orange St, Wilmington, DE 19801, USA",
+    "tax_id": "EIN 88-1234567"
+  },
+  "policy": {
+    "name": "Política Andes Digital - octubre",
+    "base_currency": "USD",
+    "max_amount_per_invoice": 5000,
+    "require_human_above": 2000,
+    "period_budget": 6500,
+    "period": "monthly",
+    "allowed_currencies": ["USD", "COP", "MXN", "EUR", "CLP", "PEN"]
+  },
+  "exchange_rates": {
+    "COP": 0.00025,
+    "MXN": 0.058,
+    "EUR": 1.08,
+    "CLP": 0.00105
+  },
+  "vendors": [
+    {"name": "Nimbus Cloud Services Inc.", "tax_id": "US-84-2290117", "is_allowed": true,
+     "agreed_amount": 1200, "agreed_currency": "USD", "agreement_tolerance_pct": 0, "agreement_notes": "Plan Business de hosting, cuota mensual fija"},
+    {"name": "Ana Lucía Restrepo", "tax_id": "CO-1020304050", "is_allowed": true,
+     "agreed_amount": 4000000, "agreed_currency": "COP", "agreement_tolerance_pct": 5, "agreement_notes": "Desarrollo frontend, tarifa mensual"},
+    {"name": "Norte Legal Asesores S.C.", "tax_id": "NLA210315AB1", "is_allowed": true},
+    {"name": "Estudio Diseño Sur SpA", "tax_id": "76.543.210-K", "is_allowed": true},
+    {"name": "Berlin Data Labs GmbH", "tax_id": "DE298765432", "is_allowed": true,
+     "agreed_amount": 450, "agreed_currency": "EUR", "agreement_tolerance_pct": 2, "agreement_notes": "Licencia de API, mensual"},
+    {"name": "Lima Translations S.A.C.", "tax_id": "20601234567", "is_allowed": true},
+    {"name": "Quick Leads Marketing Ltd.", "tax_id": "GB123456789", "is_allowed": false}
+  ],
+  "invoices": [
+    {
+      "id": "T04", "file": "01-norte-legal-due-diligence.pdf", "kind": "trap",
+      "case": "Monto que supera el límite y necesita aprobación humana",
+      "expected": "escalated", "expected_rule": "require_human_above",
+      "why": "55.000 MXN = 3.190 USD supera el umbral de revisión humana (2.000 USD)",
+      "data": {"vendor_name": "Norte Legal Asesores S.C.", "vendor_tax_id": "NLA210315AB1", "invoice_number": "NL-2026-118",
+               "issue_date": "2026-10-01", "due_date": "2026-10-31", "currency": "MXN",
+               "subtotal": 47413.79, "tax_amount": 7586.21, "total_amount": 55000.00, "tax_label": "IVA 16%",
+               "items": [["Due diligence legal para expansión a México", 1, 47413.79]]}
+    },
+    {
+      "id": "T03", "file": "02-restrepo-octubre.pdf", "kind": "trap",
+      "case": "Factura que no cuadra con lo acordado",
+      "expected": "escalated", "expected_rule": "agreement_match",
+      "why": "6.500.000 COP frente a 4.000.000 COP acordados (+62,5 %, tolerancia 5 %)",
+      "data": {"vendor_name": "Ana Lucía Restrepo", "vendor_tax_id": "CO-1020304050", "invoice_number": "AR-031",
+               "issue_date": "2026-10-01", "due_date": "2026-10-15", "currency": "COP",
+               "subtotal": 6500000, "tax_amount": 0, "total_amount": 6500000, "tax_label": "IVA (no responsable)",
+               "items": [["Desarrollo frontend - octubre", 1, 4000000], ["Horas adicionales no acordadas", 1, 2500000]]}
+    },
+    {
+      "id": "T05", "file": "03-diseno-sur-rediseno.pdf", "kind": "trap",
+      "case": "Monto que supera el máximo por factura",
+      "expected": "blocked", "expected_rule": "max_amount_per_invoice",
+      "why": "7.800 USD supera el máximo por factura (5.000 USD)",
+      "data": {"vendor_name": "Estudio Diseño Sur SpA", "vendor_tax_id": "76.543.210-K", "invoice_number": "DS-0450",
+               "issue_date": "2026-10-02", "due_date": "2026-11-01", "currency": "USD",
+               "subtotal": 7800, "tax_amount": 0, "total_amount": 7800, "tax_label": "IVA (exportación de servicios)",
+               "items": [["Rediseño completo de marca y sitio web", 1, 7800]]}
+    },
+    {
+      "id": "N01", "file": "04-nimbus-octubre.pdf", "kind": "normal",
+      "case": "Cuota mensual que coincide con lo acordado",
+      "expected": "approved", "expected_rule": null,
+      "why": "1.200 USD = lo acordado; dentro de límites y presupuesto",
+      "data": {"vendor_name": "Nimbus Cloud Services Inc.", "vendor_tax_id": "US-84-2290117", "invoice_number": "INV-NB-1001",
+               "issue_date": "2026-10-01", "due_date": "2026-10-31", "currency": "USD",
+               "subtotal": 1200, "tax_amount": 0, "total_amount": 1200, "tax_label": "Sales tax (exempt)",
+               "items": [["Plan Business - hosting y CDN (octubre 2026)", 1, 1200]]}
+    },
+    {
+      "id": "N02", "file": "05-restrepo-septiembre.pdf", "kind": "normal",
+      "case": "Contratista en COP según lo acordado",
+      "expected": "approved", "expected_rule": null,
+      "why": "4.000.000 COP = 1.000 USD, coincide con lo acordado",
+      "data": {"vendor_name": "Ana Lucía Restrepo", "vendor_tax_id": "CO-1020304050", "invoice_number": "AR-030",
+               "issue_date": "2026-10-02", "due_date": "2026-10-16", "currency": "COP",
+               "subtotal": 4000000, "tax_amount": 0, "total_amount": 4000000, "tax_label": "IVA (no responsable)",
+               "items": [["Desarrollo frontend - septiembre", 1, 4000000]]}
+    },
+    {
+      "id": "N03", "file": "06-norte-legal-contratos.pdf", "kind": "normal",
+      "case": "Proveedor mexicano en MXN sin acuerdo fijo",
+      "expected": "approved", "expected_rule": null,
+      "why": "15.000 MXN = 870 USD, bajo todos los límites",
+      "data": {"vendor_name": "Norte Legal Asesores S.C.", "vendor_tax_id": "NLA210315AB1", "invoice_number": "NL-2026-121",
+               "issue_date": "2026-10-03", "due_date": "2026-11-02", "currency": "MXN",
+               "subtotal": 12931.03, "tax_amount": 2068.97, "total_amount": 15000.00, "tax_label": "IVA 16%",
+               "items": [["Revisión de contratos de proveedores", 1, 12931.03]]}
+    },
+    {
+      "id": "N04", "file": "07-diseno-sur-branding-foto.png", "kind": "normal",
+      "case": "Factura fotografiada (imagen)",
+      "expected": "approved", "expected_rule": null,
+      "why": "850 USD de proveedor autorizado; prueba la lectura de una foto",
+      "data": {"vendor_name": "Estudio Diseño Sur SpA", "vendor_tax_id": "76.543.210-K", "invoice_number": "DS-0457",
+               "issue_date": "2026-10-03", "due_date": "2026-11-02", "currency": "USD",
+               "subtotal": 850, "tax_amount": 0, "total_amount": 850, "tax_label": "IVA (exportación de servicios)",
+               "items": [["Piezas de branding para campaña", 1, 850]]}
+    },
+    {
+      "id": "N05", "file": "08-berlin-data-api.pdf", "kind": "normal",
+      "case": "Proveedor europeo en EUR según lo acordado",
+      "expected": "approved", "expected_rule": null,
+      "why": "450 EUR = 486 USD, coincide con lo acordado",
+      "data": {"vendor_name": "Berlin Data Labs GmbH", "vendor_tax_id": "DE298765432", "invoice_number": "BDL-2026-0977",
+               "issue_date": "2026-10-04", "due_date": "2026-10-18", "currency": "EUR",
+               "subtotal": 450, "tax_amount": 0, "total_amount": 450, "tax_label": "USt. (Reverse Charge)",
+               "items": [["Licencia API Pro - octubre 2026", 1, 450]]}
+    },
+    {
+      "id": "N06", "file": "09-diseno-sur-ilustraciones.pdf", "kind": "normal",
+      "case": "Segunda factura del mismo proveedor (número distinto)",
+      "expected": "approved", "expected_rule": null,
+      "why": "600 USD; número de factura distinto, no es duplicado",
+      "data": {"vendor_name": "Estudio Diseño Sur SpA", "vendor_tax_id": "76.543.210-K", "invoice_number": "DS-0461",
+               "issue_date": "2026-10-05", "due_date": "2026-11-04", "currency": "USD",
+               "subtotal": 600, "tax_amount": 0, "total_amount": 600, "tax_label": "IVA (exportación de servicios)",
+               "items": [["Ilustraciones para blog (6 piezas)", 6, 100]]}
+    },
+    {
+      "id": "T01", "file": "10-nimbus-octubre-copia.pdf", "kind": "trap",
+      "case": "Cobro duplicado (otra copia de una factura ya registrada)",
+      "expected": "blocked", "expected_rule": "duplicate_invoice",
+      "why": "INV-NB-1001 de Nimbus ya se registró antes",
+      "data": {"vendor_name": "Nimbus Cloud Services Inc.", "vendor_tax_id": "US-84-2290117", "invoice_number": "INV-NB-1001",
+               "issue_date": "2026-10-01", "due_date": "2026-10-31", "currency": "USD",
+               "subtotal": 1200, "tax_amount": 0, "total_amount": 1200, "tax_label": "Sales tax (exempt)",
+               "items": [["Plan Business - hosting y CDN (octubre 2026)", 1, 1200]],
+               "note": "REENVÍO - recordatorio de pago"}
+    },
+    {
+      "id": "T02", "file": "11-pampa-software.pdf", "kind": "trap",
+      "case": "Beneficiario nuevo que no está en la lista permitida",
+      "expected": "escalated", "expected_rule": "vendor_allowed",
+      "why": "Pampa Software no es un proveedor registrado: se crea pendiente y se escala",
+      "data": {"vendor_name": "Pampa Software S.R.L.", "vendor_tax_id": "30-71234567-8", "invoice_number": "PS-0001-00000042",
+               "issue_date": "2026-10-06", "due_date": "2026-11-05", "currency": "USD",
+               "subtotal": 1100, "tax_amount": 0, "total_amount": 1100, "tax_label": "IVA (exportación de servicios)",
+               "items": [["Integración de pasarela de pagos", 1, 1100]]}
+    },
+    {
+      "id": "T07", "file": "12-quick-leads.pdf", "kind": "trap",
+      "case": "Proveedor bloqueado por la empresa",
+      "expected": "blocked", "expected_rule": "vendor_allowed",
+      "why": "Quick Leads Marketing está bloqueado",
+      "data": {"vendor_name": "Quick Leads Marketing Ltd.", "vendor_tax_id": "GB123456789", "invoice_number": "QL-7781",
+               "issue_date": "2026-10-06", "due_date": "2026-10-20", "currency": "USD",
+               "subtotal": 900, "tax_amount": 0, "total_amount": 900, "tax_label": "VAT (outside scope)",
+               "items": [["Base de datos de 5.000 contactos", 1, 900]]}
+    },
+    {
+      "id": "T08", "file": "13-berlin-data-chf.pdf", "kind": "trap",
+      "case": "Moneda no permitida",
+      "expected": "blocked", "expected_rule": "currency_allowed",
+      "why": "CHF no está entre las monedas permitidas",
+      "data": {"vendor_name": "Berlin Data Labs GmbH", "vendor_tax_id": "DE298765432", "invoice_number": "BDL-2026-0981",
+               "issue_date": "2026-10-07", "due_date": "2026-10-21", "currency": "CHF",
+               "subtotal": 300, "tax_amount": 0, "total_amount": 300, "tax_label": "MWST (Reverse Charge)",
+               "items": [["Soporte premium (Zürich)", 1, 300]]}
+    },
+    {
+      "id": "T09", "file": "14-diseno-sur-totales.pdf", "kind": "trap",
+      "case": "Importes que no cuadran (subtotal + impuestos ≠ total)",
+      "expected": "escalated", "expected_rule": "invoice_totals",
+      "why": "500 + 0 = 500, pero la factura cobra 650",
+      "data": {"vendor_name": "Estudio Diseño Sur SpA", "vendor_tax_id": "76.543.210-K", "invoice_number": "DS-0470",
+               "issue_date": "2026-10-08", "due_date": "2026-11-07", "currency": "USD",
+               "subtotal": 500, "tax_amount": 0, "total_amount": 650, "tax_label": "IVA (exportación de servicios)",
+               "items": [["Adaptación de piezas a redes sociales", 1, 500]]}
+    },
+    {
+      "id": "T11", "file": "15-lima-translations.pdf", "kind": "trap",
+      "case": "Moneda permitida sin tipo de cambio configurado",
+      "expected": "escalated", "expected_rule": "currency_conversion",
+      "why": "PEN está permitida pero no tiene tipo de cambio: no se pueden comprobar los límites",
+      "data": {"vendor_name": "Lima Translations S.A.C.", "vendor_tax_id": "20601234567", "invoice_number": "F001-000312",
+               "issue_date": "2026-10-08", "due_date": "2026-10-22", "currency": "PEN",
+               "subtotal": 1694.92, "tax_amount": 305.08, "total_amount": 2000.00, "tax_label": "IGV 18%",
+               "items": [["Traducción técnica EN-ES (12.000 palabras)", 1, 1694.92]]}
+    },
+    {
+      "id": "T12", "file": "16-nimbus-eur.pdf", "kind": "trap",
+      "case": "Factura en otra moneda que la acordada",
+      "expected": "escalated", "expected_rule": "agreement_match",
+      "why": "Lo acordado con Nimbus es en USD y la factura llega en EUR",
+      "data": {"vendor_name": "Nimbus Cloud Services Inc.", "vendor_tax_id": "US-84-2290117", "invoice_number": "INV-NB-1002",
+               "issue_date": "2026-10-09", "due_date": "2026-11-08", "currency": "EUR",
+               "subtotal": 1110, "tax_amount": 0, "total_amount": 1110, "tax_label": "VAT (exempt)",
+               "items": [["Plan Business - región Europa (octubre 2026)", 1, 1110]]}
+    },
+    {
+      "id": "T06", "file": "17-diseno-sur-campana.pdf", "kind": "trap",
+      "case": "Presupuesto insuficiente para el periodo",
+      "expected": "blocked", "expected_rule": "period_budget",
+      "why": "Ya aprobado 5.006 USD; +1.800 = 6.806 supera el presupuesto mensual de 6.500",
+      "data": {"vendor_name": "Estudio Diseño Sur SpA", "vendor_tax_id": "76.543.210-K", "invoice_number": "DS-0475",
+               "issue_date": "2026-10-10", "due_date": "2026-11-09", "currency": "USD",
+               "subtotal": 1800, "tax_amount": 0, "total_amount": 1800, "tax_label": "IVA (exportación de servicios)",
+               "items": [["Campaña de lanzamiento - diseño completo", 1, 1800]]}
+    },
+    {
+      "id": "T10", "file": "18-grafico-ventas.png", "kind": "trap",
+      "case": "Archivo que no es una factura",
+      "expected": "not_invoice", "expected_rule": null,
+      "why": "Es un gráfico de ventas, no una factura",
+      "data": {"not_invoice": true}
+    }
+  ]
+}
