@@ -126,7 +126,8 @@ function VendorFormModal({ vendor, currencies, onClose, onSaved }) {
           </legend>
           <p className="-mt-1 text-[13px] text-muted">
             Si una factura se desvía de este monto más que la tolerancia, o llega en otra moneda, el agente la escala a
-            revisión humana. Déjalo vacío si no hay un monto fijo.
+            revisión humana. Déjalo vacío si no hay un monto fijo; la moneda y la tolerancia se activan al escribir el
+            monto.
           </p>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-[1fr_96px_110px]">
             <div className="col-span-2 sm:col-span-1">
@@ -158,7 +159,8 @@ function VendorFormModal({ vendor, currencies, onClose, onSaved }) {
                 min="0"
                 max="100"
                 step="0.5"
-                value={form.tolerance}
+                placeholder="—"
+                value={hasAgreement ? form.tolerance : ''}
                 onChange={set('tolerance')}
                 disabled={!hasAgreement}
               />

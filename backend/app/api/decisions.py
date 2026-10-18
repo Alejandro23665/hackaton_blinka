@@ -153,7 +153,7 @@ def export_decisions(
             ", ".join(RULE_LABELS.get(rule, rule) for rule in r.failed_rules),
             r.explanation,
         ])
-    filename = f"blinka-registro-{date.today():%Y%m%d}.csv"
+    filename = f"rekreuz-registro-{date.today():%Y%m%d}.csv"
     return StreamingResponse(
         iter([buffer.getvalue()]),
         media_type="text/csv; charset=utf-8",

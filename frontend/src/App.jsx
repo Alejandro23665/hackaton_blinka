@@ -24,7 +24,7 @@ function Logo() {
         <Icon name="bot" size={19} strokeWidth={2} />
       </span>
       <div className="leading-tight">
-        <p className="text-[17px] font-semibold tracking-tight text-ink">blinka</p>
+        <p className="text-[17px] font-semibold tracking-tight text-ink">rekreuz</p>
         <p className="hidden text-[11px] whitespace-nowrap text-subtle sm:block">Agente de pagos</p>
       </div>
     </div>
