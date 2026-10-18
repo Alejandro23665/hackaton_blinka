@@ -30,5 +30,6 @@ RUN useradd --create-home blinka && chown -R blinka /app
 USER blinka
 
 EXPOSE 8000
-# Migraciones en cada arranque (idempotentes) y servidor en el puerto que asigna la plataforma
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
+# Sin DATABASE_URL la app usaría el valor de desarrollo (localhost) y fallaría con un traceback
+# confuso: se avisa con un mensaje claro. Después, migraciones (idempotentes) y servidor.
+CMD ["sh", "-c", "if [ -z \"$DATABASE_URL\" ]; then echo 'ERROR: falta la variable DATABASE_URL. En Railway o Render, conectala a la base Postgres del proyecto (ver docs/04-despliegue.md).' >&2; exit 1; fi; alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
