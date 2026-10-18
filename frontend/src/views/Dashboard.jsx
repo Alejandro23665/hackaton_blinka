@@ -5,6 +5,7 @@ import Icon from '../components/icons'
 import ReviewForm from '../components/ReviewForm'
 import { Card, Empty, ErrorBox, Loading, StatusBadge, Tag, Tile } from '../components/ui'
 import { dateTime, money, OUTCOME_SERIES, PERIOD_LABELS, shortDate } from '../format'
+import { convert, ratesMap } from '../fx'
 import { useLoad } from '../hooks'
 
 const SPENT_STATUSES = ['approved', 'paid'] // igual que el backend
@@ -14,7 +15,7 @@ const utcKey = (d) => d.toISOString().slice(0, 10)
 const localKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
 /** Serie diaria del periodo actual a partir de las facturas reales (mismo criterio que la API). */
-function buildSpendSeries(budget, invoices) {
+function buildSpendSeries(budget, invoices, rates) {
   const start = new Date(budget.period_start)
   const length =
     budget.period === 'weekly'
@@ -26,8 +27,10 @@ function buildSpendSeries(budget, invoices) {
   invoices
     .filter((inv) => SPENT_STATUSES.includes(inv.status))
     .forEach((inv) => {
+      const amount = convert(inv.amount, inv.currency, budget.base_currency, rates)
+      if (amount == null) return // sin tipo de cambio: el backend tampoco la suma (y lo avisa)
       const key = utcKey(new Date(inv.created_at))
-      dailyByKey[key] = (dailyByKey[key] ?? 0) + inv.amount
+      dailyByKey[key] = (dailyByKey[key] ?? 0) + amount
     })
 
   let running = 0
@@ -73,10 +76,10 @@ function buildActivity(decisions) {
 
 /* ---------------------------------------------------------------- */
 
-function SpendCard({ policy, budget, invoices, loading }) {
+function SpendCard({ policy, budget, invoices, rates, loading }) {
   const series = useMemo(
-    () => (budget && invoices ? buildSpendSeries(budget, invoices) : []),
-    [budget, invoices],
+    () => (budget && invoices ? buildSpendSeries(budget, invoices, ratesMap(rates)) : []),
+    [budget, invoices, rates],
   )
 
   if (loading) {
@@ -100,6 +103,7 @@ function SpendCard({ policy, budget, invoices, loading }) {
   const pct = budget ? (budget.spent / budget.period_budget) * 100 : 0
   const tone = pct >= 90 ? 'danger' : pct >= 70 ? 'warning' : 'brand'
   const approvedCount = invoices?.filter((i) => SPENT_STATUSES.includes(i.status)).length ?? 0
+  const base = policy.base_currency
 
   return (
     <Card
@@ -110,12 +114,20 @@ function SpendCard({ policy, budget, invoices, loading }) {
       <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-5">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
-            <p className="text-4xl font-semibold tracking-tight text-ink tabular sm:text-[44px] sm:leading-none">{money(budget?.spent ?? 0)}</p>
+            <p className="text-4xl font-semibold tracking-tight text-ink tabular sm:text-[44px] sm:leading-none">{money(budget?.spent ?? 0)}
+              <span className="ml-2 text-lg font-medium text-subtle">{base}</span>
+            </p>
             <Tag tone={tone}>{pct.toLocaleString('es', { maximumFractionDigits: 1 })}% del presupuesto</Tag>
           </div>
           <p className="mt-2 text-[13px] text-muted">
-            Aprobado en {approvedCount} {approvedCount === 1 ? 'factura' : 'facturas'} de {money(budget?.period_budget ?? policy.period_budget)}
+            Aprobado en {approvedCount} {approvedCount === 1 ? 'factura' : 'facturas'} de {money(budget?.period_budget ?? policy.period_budget, base)}
           </p>
+          {budget?.missing_rates?.length > 0 && (
+            <p className="mt-2 flex items-start gap-1.5 text-xs text-warning-700">
+              <Icon name="alert" size={14} className="mt-px" />
+              Sin tipo de cambio para {budget.missing_rates.join(', ')}: esas facturas no se suman y el agente escalará las nuevas.
+            </p>
+          )}
         </div>
 
         <dl className="grid w-full grid-cols-3 gap-2 sm:w-auto sm:gap-3">
@@ -126,7 +138,7 @@ function SpendCard({ policy, budget, invoices, loading }) {
           ].map(([label, value, color]) => (
             <Tile key={label} className="!px-3 !py-2.5 sm:min-w-32">
               <dt className="text-[11px] leading-tight text-muted">{label}</dt>
-              <dd className={`mt-0.5 text-[15px] font-semibold tabular ${color}`}>{money(value)}</dd>
+              <dd className={`mt-0.5 text-[15px] font-semibold tabular ${color}`}>{money(value, base)}</dd>
             </Tile>
           ))}
         </dl>
@@ -140,12 +152,12 @@ function SpendCard({ policy, budget, invoices, loading }) {
       </div>
 
       <div className="mt-6 -mx-1">
-        <SpendChart points={series} />
+        <SpendChart points={series} currency={base} />
       </div>
       <p className="mt-1 flex items-center gap-4 text-xs text-muted">
         <span className="flex items-center gap-1.5"><span className="h-0.5 w-4 rounded-full bg-brand-600" />Acumulado</span>
         <span className="flex items-center gap-1.5"><span className="h-3 w-1 rounded-full bg-brand-200" />Aprobado por día</span>
-        <span className="ml-auto hidden sm:inline">Monedas: {policy.allowed_currencies.join(', ')}</span>
+        <span className="ml-auto hidden sm:inline">Montos en {base} · Monedas aceptadas: {policy.allowed_currencies.join(', ')}</span>
       </p>
     </Card>
   )
@@ -288,6 +300,7 @@ export default function Dashboard({ version, onChange, openInvoice }) {
   const decisions = useLoad(() => api.decisions.list({ limit: 500 }), version)
   const policy = useLoad(() => api.policies.active().catch(() => null), version)
   const budget = useLoad(() => api.policies.budget().catch(() => null), version)
+  const rates = useLoad(() => api.exchangeRates.list(), version)
 
   const vendorName = (id) => vendors.data?.find((v) => v.id === id)?.name ?? `Proveedor #${id}`
   const invoiceNumber = (id) => invoices.data?.find((i) => i.id === id)?.invoice_number ?? `Factura #${id}`
@@ -300,6 +313,7 @@ export default function Dashboard({ version, onChange, openInvoice }) {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         <SpendCard
+          rates={rates.data}
           policy={policy.data}
           budget={budget.data}
           invoices={invoices.data}

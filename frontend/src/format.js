@@ -15,8 +15,12 @@ export const OUTCOME_SERIES = [
 
 export const RULE_LABELS = {
   vendor_allowed: 'Proveedor autorizado',
+  duplicate_invoice: 'Control de duplicados',
+  agreement_match: 'Acuerdo con el proveedor',
+  invoice_totals: 'Suma de la factura',
   active_policy: 'Política activa',
   currency_allowed: 'Moneda permitida',
+  currency_conversion: 'Conversión a moneda base',
   max_amount_per_invoice: 'Máximo por factura',
   period_budget: 'Presupuesto del periodo',
   require_human_above: 'Umbral de revisión humana',

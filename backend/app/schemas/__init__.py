@@ -16,16 +16,56 @@ class ReadModel(BaseModel):
 
 # --- Vendors ---------------------------------------------------------------
 
-class VendorCreate(BaseModel):
+class AgreementFields(BaseModel):
+    """Lo acordado con el proveedor. Monto y moneda van juntos (o ninguno)."""
+
+    agreed_amount: Annotated[Decimal, Field(gt=0, max_digits=14, decimal_places=2)] | None = None
+    agreed_currency: str | None = Field(default=None, min_length=3, max_length=3)
+    agreement_tolerance_pct: Annotated[Decimal, Field(ge=0, le=100, max_digits=5, decimal_places=2)] | None = None
+    agreement_notes: str | None = Field(default=None, max_length=500)
+
+    @field_validator("agreed_currency")
+    @classmethod
+    def upper_currency(cls, value: str | None) -> str | None:
+        return value.strip().upper() if value else None
+
+
+def normalize_tax_id(value: str | None) -> str | None:
+    """Solo letras y dígitos en mayúscula, igual que hace el agente al leer facturas."""
+    cleaned = "".join(ch for ch in (value or "") if ch.isalnum()).upper()
+    return cleaned or None
+
+
+def check_agreement_complete(amount, currency) -> None:
+    if (amount is None) != (currency is None):
+        raise ValueError("El acuerdo necesita monto y moneda a la vez (o ninguno de los dos)")
+
+
+class VendorCreate(AgreementFields):
     name: str = Field(min_length=1, max_length=200)
     tax_id: str | None = Field(default=None, max_length=50)
     is_allowed: bool = True
 
+    @field_validator("tax_id")
+    @classmethod
+    def clean_tax_id(cls, value: str | None) -> str | None:
+        return normalize_tax_id(value)
 
-class VendorUpdate(BaseModel):
+    @model_validator(mode="after")
+    def agreement_complete(self) -> "VendorCreate":
+        check_agreement_complete(self.agreed_amount, self.agreed_currency)
+        return self
+
+
+class VendorUpdate(AgreementFields):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     tax_id: str | None = Field(default=None, max_length=50)
     is_allowed: bool | None = None
+
+    @field_validator("tax_id")
+    @classmethod
+    def clean_tax_id(cls, value: str | None) -> str | None:
+        return normalize_tax_id(value)
 
 
 class VendorRead(ReadModel):
@@ -34,6 +74,10 @@ class VendorRead(ReadModel):
     tax_id: str | None
     is_allowed: bool
     needs_review: bool
+    agreed_amount: Money | None
+    agreed_currency: str | None
+    agreement_tolerance_pct: Annotated[Decimal, PlainSerializer(float, return_type=float, when_used="json")]
+    agreement_notes: str | None
     created_at: datetime
 
 
@@ -46,7 +90,14 @@ class PolicyCreate(BaseModel):
     period: Literal["monthly", "weekly"] = "monthly"
     require_human_above: PositiveMoney
     allowed_currencies: list[str] = Field(min_length=1)
+    # Moneda de los límites y del presupuesto; las facturas se convierten a ella
+    base_currency: str = Field(default="USD", min_length=3, max_length=3)
     is_active: bool = True
+
+    @field_validator("base_currency")
+    @classmethod
+    def upper_base(cls, value: str) -> str:
+        return value.strip().upper()
 
     @field_validator("allowed_currencies")
     @classmethod
@@ -71,6 +122,7 @@ class PolicyRead(ReadModel):
     max_amount_per_invoice: Money
     period_budget: Money
     period: str
+    base_currency: str
     require_human_above: Money
     allowed_currencies: list[str]
     is_active: bool
@@ -81,9 +133,24 @@ class BudgetStatus(BaseModel):
     policy_id: int
     period: str
     period_start: datetime
+    base_currency: str
     period_budget: Money
     spent: Money
     remaining: Money
+    # Monedas de facturas aprobadas que no se pudieron convertir (el gasto real puede ser mayor)
+    missing_rates: list[str] = []
+
+
+# --- Exchange rates --------------------------------------------------------
+
+class ExchangeRateUpsert(BaseModel):
+    usd_per_unit: Decimal = Field(gt=0, max_digits=18, decimal_places=8)
+
+
+class ExchangeRateRead(ReadModel):
+    currency: str
+    usd_per_unit: Annotated[Decimal, PlainSerializer(float, return_type=float, when_used="json")]
+    updated_at: datetime
 
 
 # --- Invoices --------------------------------------------------------------

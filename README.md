@@ -61,6 +61,19 @@ Para que el agente lea facturas subidas, añade tu clave de OpenRouter en `.env`
 
 El frontend usa `VITE_API_URL` (por defecto `http://localhost:8000`); ver `frontend/.env.example`.
 
+## Limpiar facturas subidas
+
+Borra los archivos de `backend/storage` y lo que se creó a partir de ellos (documentos,
+facturas, decisiones y proveedores que creó el agente). No toca políticas, proveedores
+creados a mano ni facturas ingresadas manualmente.
+
+```bash
+cd backend
+python -m app.cleanup --dry-run   # ver qué se borraría
+python -m app.cleanup             # pide confirmación
+python -m app.cleanup --yes       # sin preguntar
+```
+
 ## Tests
 
 ```bash

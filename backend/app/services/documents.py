@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 
 from app.models import Document, Invoice, Vendor
 from app.services import agent, extractor, storage
+from app.schemas import normalize_tax_id
 from app.services.extractor import ExtractedInvoice, ExtractionError
 
 
@@ -16,9 +17,6 @@ class DuplicateDocument(Exception):
         self.document = document
 
 
-def _normalize_tax_id(value: str | None) -> str | None:
-    cleaned = "".join(ch for ch in (value or "") if ch.isalnum()).upper()
-    return cleaned or None
 
 
 def find_vendor(session: Session, name: str | None, tax_id: str | None) -> Vendor | None:
@@ -91,14 +89,6 @@ def process_upload(session: Session, data: bytes, original_name: str) -> Documen
         return _fail(session, document, str(exc))
 
     warnings = list(extracted.warnings)
-    due_date = extracted.due_date
-    if due_date is None:
-        due_date = extracted.issue_date or datetime.now(UTC).date()
-        warnings.append(
-            "La factura no indica fecha de vencimiento; se usó "
-            + ("la fecha de emisión." if extracted.issue_date else "la fecha de hoy.")
-        )
-
     extraction = {
         **meta,
         "data": extracted.model_dump(mode="json"),
@@ -107,26 +97,37 @@ def process_upload(session: Session, data: bytes, original_name: str) -> Documen
     }
     document.extraction = extraction
 
+    # 2. ¿Es una factura? Algunos modelos no rellenan is_invoice: si no encontró ningún dato
+    #    clave y no confía en la lectura, también se trata como "no es una factura".
     missing = _missing_fields(extracted)
+    if not extracted.is_invoice or (len(missing) == 4 and extracted.confidence < 0.2):
+        reason = extracted.not_invoice_reason or (warnings[0] if warnings else None)
+        message = "El archivo no es una factura ni una boleta"
+        return _fail(session, document, f"{message}: {reason.rstrip('.')}." if reason else f"{message}.")
     if missing:
-        return _fail(session, document, "El agente no pudo leer: " + ", ".join(missing) + ".")
+        return _fail(
+            session,
+            document,
+            "Parece una factura, pero el agente no pudo leer: " + ", ".join(missing)
+            + ". Prueba con una imagen más nítida o el PDF original.",
+        )
+
+    due_date = extracted.due_date
+    if due_date is None:
+        due_date = extracted.issue_date or datetime.now(UTC).date()
+        warnings.append(
+            "La factura no indica fecha de vencimiento; se usó "
+            + ("la fecha de emisión." if extracted.issue_date else "la fecha de hoy.")
+        )
 
     # 2. Proveedor y duplicados
-    tax_id = _normalize_tax_id(extracted.vendor_tax_id)
+    tax_id = normalize_tax_id(extracted.vendor_tax_id)
     number = extracted.invoice_number.strip()[:100]
     vendor = find_vendor(session, extracted.vendor_name, tax_id)
     created = vendor is None
 
+    # Si la factura ya existe, se registra igual: el agente la bloquea como duplicada y lo explica
     if vendor is not None:
-        duplicate = session.exec(
-            select(Invoice).where(Invoice.vendor_id == vendor.id, Invoice.invoice_number == number)
-        ).first()
-        if duplicate:
-            return _fail(
-                session,
-                document,
-                f"La factura {number} de {vendor.name} ya existe (id {duplicate.id}).",
-            )
         if tax_id and not vendor.tax_id:
             vendor.tax_id = tax_id
             session.add(vendor)

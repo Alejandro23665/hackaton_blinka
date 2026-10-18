@@ -62,6 +62,7 @@ def upload(client, content=PDF, name="factura.pdf"):
 
 
 def test_upload_known_vendor_creates_and_approves_invoice(client, storage_dir, extract):
+    client.put("/exchange-rates/PEN", json={"usd_per_unit": 0.27})  # 472 PEN = 127,44 USD
     client.post("/policies", json=POLICY)
     client.post("/vendors", json={"name": "acme suministros"})  # coincide por nombre
 
@@ -84,8 +85,9 @@ def test_upload_known_vendor_creates_and_approves_invoice(client, storage_dir, e
     assert invoice["currency"] == "PEN"
     assert invoice["document"]["id"] == doc["id"]
     assert invoice["vendor"]["tax_id"] == "20123456789"  # normalizado y guardado
-    rules = {r["rule"]: r["passed"] for r in invoice["decisions"][0]["rules_evaluated"]}
-    assert rules["document_extraction"] is True
+    rules = {r["rule"]: r for r in invoice["decisions"][0]["rules_evaluated"]}
+    assert rules["document_extraction"]["passed"] is True
+    assert "472,00 PEN = 127,44 USD" in rules["currency_conversion"]["detail"]
 
 
 def test_unknown_vendor_is_created_pending_and_invoice_escalated(client, storage_dir, extract):
@@ -143,6 +145,26 @@ def test_failed_document_can_be_retried_with_same_file(client, storage_dir, extr
     assert len(list(storage_dir.rglob("*.pdf"))) == 1
 
 
+def test_non_invoice_file_is_reported_as_such(client, storage_dir, extract):
+    extract["result"] = ExtractedInvoice(
+        is_invoice=False,
+        not_invoice_reason="Es una ilustración de cuatro personajes de bloques.",
+        confidence=0,
+        warnings=[],
+    )
+    doc = upload(client, PNG, "ideas.png").json()
+    assert doc["status"] == "failed"
+    assert doc["error"] == "El archivo no es una factura ni una boleta: Es una ilustración de cuatro personajes de bloques."
+    assert client.get("/invoices").json() == []
+
+
+def test_non_invoice_detected_even_if_model_skips_the_flag(client, storage_dir, extract):
+    # Modelo que no rellena is_invoice pero no encontró nada y lo explica en los avisos
+    extract["result"] = ExtractedInvoice(confidence=0, warnings=["El archivo es una captura de un chat."])
+    doc = upload(client, PNG, "chat.png").json()
+    assert doc["error"] == "El archivo no es una factura ni una boleta: El archivo es una captura de un chat."
+
+
 def test_missing_key_fields_fail_without_creating_invoice(client, storage_dir, extract):
     extract["result"] = fake_extraction(total_amount=None, invoice_number=None)
     doc = upload(client).json()
@@ -151,16 +173,27 @@ def test_missing_key_fields_fail_without_creating_invoice(client, storage_dir, e
     assert client.get("/invoices").json() == []
 
 
-def test_duplicates_are_rejected(client, storage_dir, extract):
+def test_duplicates(client, storage_dir, extract):
     client.post("/policies", json=POLICY)
-    assert upload(client).status_code == 201
+    first = upload(client).json()
     # Mismo archivo -> 409 y no se vuelve a llamar al modelo
     assert upload(client).status_code == 409
     assert extract["calls"] == 1
-    # Otro archivo con la misma factura -> documento fallido por duplicado
+
+    # Otro archivo con la misma factura -> se lee, se registra y el agente la bloquea
     doc = upload(client, PDF + b"%copia", "copia.pdf").json()
-    assert doc["status"] == "failed"
-    assert "ya existe" in doc["error"]
+    assert doc["status"] == "processed"
+    invoice = client.get(f"/invoices/{doc['invoice_id']}").json()
+    assert invoice["status"] == "blocked"
+    assert invoice["document"]["original_name"] == "copia.pdf"
+    rule = next(r for r in invoice["decisions"][0]["rules_evaluated"] if r["rule"] == "duplicate_invoice")
+    assert rule["passed"] is False
+    assert f"id {first['invoice_id']}" in rule["detail"]
+
+    # La original no cambia al reevaluarla: el duplicado es siempre la posterior
+    original = client.post(f"/invoices/{first['invoice_id']}/evaluate").json()
+    dup_rule = next(r for r in original["decisions"][-1]["rules_evaluated"] if r["rule"] == "duplicate_invoice")
+    assert dup_rule["passed"] is True
 
 
 def test_rejects_unsupported_and_empty_files(client, storage_dir, extract):
@@ -223,3 +256,41 @@ def test_extractor_does_not_retry_client_errors_and_sends_fallbacks(monkeypatch)
         extractor.extract_invoice(PDF, "application/pdf", "f.pdf")
     assert len(calls) == 1
     assert calls[0]["models"] == [settings.OPENROUTER_MODEL, "a/uno", "b/dos"]
+
+
+def test_cleanup_removes_uploads_but_keeps_manual_data(client, engine, storage_dir, extract):
+    from sqlmodel import Session
+
+    from app import cleanup
+
+    client.post("/policies", json=POLICY)
+    client.post("/vendors", json={"name": "Manual SA"})
+    manual = client.post(
+        "/invoices",
+        json={"invoice_number": "M-1", "vendor_id": 1, "amount": 10, "currency": "PEN", "due_date": "2026-11-30"},
+    ).json()
+    doc = upload(client).json()  # proveedor nuevo creado por el agente
+    assert doc["status"] == "processed"
+
+    with Session(engine) as session:
+        p = cleanup.plan(session)
+        assert len(p["documents"]) == 1 and len(p["invoices"]) == 1 and len(p["files"]) == 1
+        assert [v.name for v in p["vendors"]] == ["ACME Suministros"]
+        cleanup.execute(session, p)
+
+    assert client.get("/documents").json() == []
+    assert [i["id"] for i in client.get("/invoices").json()] == [manual["id"]]
+    assert [v["name"] for v in client.get("/vendors").json()] == ["Manual SA"]
+    assert client.get("/policies/active").status_code == 200
+    assert list(storage_dir.rglob("*.pdf")) == []
+
+
+def test_deleting_invoice_removes_its_uploaded_file(client, storage_dir, extract):
+    client.post("/policies", json=POLICY)  # sin tipo de cambio de PEN -> la factura queda escalada
+    doc = upload(client).json()
+    assert client.get(f"/invoices/{doc['invoice_id']}").json()["status"] == "escalated"
+    assert len(list(storage_dir.rglob("*.pdf"))) == 1
+
+    assert client.delete(f"/invoices/{doc['invoice_id']}").status_code == 204
+    assert client.get("/documents").json() == []
+    assert list(storage_dir.rglob("*.pdf")) == []

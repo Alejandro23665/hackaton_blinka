@@ -4,7 +4,7 @@ from sqlmodel import col, select
 from app.api.deps import SessionDep
 from app.models import Decision, Document, Invoice, Vendor
 from app.schemas import InvoiceCreate, InvoiceDetail, InvoiceRead, ReviewRequest
-from app.services import agent
+from app.services import agent, storage
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
@@ -49,18 +49,7 @@ def create_invoice(payload: InvoiceCreate, session: SessionDep):
     if session.get(Vendor, payload.vendor_id) is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "El proveedor no existe")
 
-    duplicate = session.exec(
-        select(Invoice).where(
-            Invoice.vendor_id == payload.vendor_id,
-            Invoice.invoice_number == payload.invoice_number,
-        )
-    ).first()
-    if duplicate:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            f"La factura {payload.invoice_number} de este proveedor ya existe (id {duplicate.id})",
-        )
-
+    # Un duplicado (mismo proveedor y número) se registra y el agente lo bloquea explicando el motivo
     data = payload.model_dump(exclude={"raw_data"})
     raw_data = payload.raw_data or payload.model_dump(mode="json", exclude={"raw_data"})
     invoice = Invoice(**data, raw_data=raw_data, status="pending")
@@ -99,3 +88,30 @@ def review_invoice(invoice_id: int, payload: ReviewRequest, session: SessionDep)
         )
     agent.review_invoice(session, invoice, payload.outcome, payload.explanation)
     return _detail(session, invoice)
+
+
+# Dinero ya comprometido: estas facturas forman parte del registro de pagos y no se borran
+UNDELETABLE_STATUSES = ("approved", "paid")
+
+
+@router.delete("/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_invoice(invoice_id: int, session: SessionDep):
+    """Elimina una factura bloqueada, escalada o pendiente, con sus decisiones y su archivo."""
+    invoice = _get_or_404(session, invoice_id)
+    if invoice.status in UNDELETABLE_STATUSES:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Una factura aprobada no se puede eliminar: es un pago comprometido y su decisión debe "
+            "poder explicarse después.",
+        )
+    for decision in session.exec(select(Decision).where(Decision.invoice_id == invoice_id)).all():
+        session.delete(decision)
+    files = []
+    for document in session.exec(select(Document).where(Document.invoice_id == invoice_id)).all():
+        files.append(document.stored_path)
+        session.delete(document)
+    session.delete(invoice)
+    session.commit()
+    # El archivo se borra solo si la base se actualizó bien
+    for path in files:
+        storage.resolve(path).unlink(missing_ok=True)

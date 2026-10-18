@@ -22,6 +22,9 @@ Amount = Annotated[Decimal | None, PlainSerializer(lambda v: None if v is None e
 
 
 class ExtractedInvoice(BaseModel):
+    # Clasificación: ¿el archivo es una factura/boleta? Si no, el motivo en lenguaje natural
+    is_invoice: bool = True
+    not_invoice_reason: str | None = None
     vendor_name: str | None = None
     vendor_tax_id: str | None = None
     invoice_number: str | None = None
@@ -44,10 +47,12 @@ RESPONSE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "required": [
-        "vendor_name", "vendor_tax_id", "invoice_number", "issue_date", "due_date",
+        "is_invoice", "not_invoice_reason", "vendor_name", "vendor_tax_id", "invoice_number", "issue_date", "due_date",
         "currency", "subtotal", "tax_amount", "total_amount", "confidence", "warnings",
     ],
     "properties": {
+        "is_invoice": {"type": "boolean", "description": "true solo si el archivo es una factura, boleta o comprobante de pago"},
+        "not_invoice_reason": _nullable("string", "Si is_invoice es false: qué es el archivo, en una frase en español"),
         "vendor_name": _nullable("string", "Razón social o nombre comercial del emisor"),
         "vendor_tax_id": _nullable("string", "Identificador fiscal del emisor (RUC, NIT, RFC, CUIT…), solo dígitos y letras"),
         "invoice_number": _nullable("string", "Número de factura o boleta tal como aparece, incluida la serie"),
@@ -77,7 +82,8 @@ Si el símbolo es ambiguo (por ejemplo "$" sin país claro), elige la más proba
 Baja de 0.8 si algo es dudoso, borroso o lo dedujiste.
 - warnings: avisos breves en español (texto ilegible, totales que no cuadran, moneda deducida, \
 falta fecha de vencimiento…). Lista vacía si todo es claro.
-- Si el archivo no es una factura o boleta, devuelve todo en null, confidence 0 y explícalo en warnings."""
+- Primero decide si el archivo es una factura, boleta o comprobante de pago (is_invoice). Si no lo es (foto, captura, documento de otro tipo, ilustración…), devuelve is_invoice false, describe brevemente qué es en not_invoice_reason, deja los demás datos en null y confidence 0.
+- Si es una factura pero ilegible o incompleta, is_invoice es true y los datos que falten van en null."""
 
 
 def _file_part(data: bytes, content_type: str, filename: str) -> dict:

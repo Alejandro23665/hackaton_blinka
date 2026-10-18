@@ -46,7 +46,7 @@ function niceMax(value) {
  * Gasto acumulado del periodo.
  * points: [{ label, date, daily, cumulative }] — cumulative = null en días futuros.
  */
-export function SpendChart({ points, height = 220 }) {
+export function SpendChart({ points, height = 220, currency }) {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState(null)
 
@@ -149,8 +149,8 @@ export function SpendChart({ points, height = 220 }) {
           style={{ left: Math.min(Math.max(x(hover), 70), width - 70), top: y(hp.cumulative) - 12 }}
         >
           <p className="text-[11px] text-subtle">{hp.fullLabel}</p>
-          <p className="text-sm font-semibold text-ink tabular">{money(hp.cumulative)}</p>
-          <p className="text-[11px] text-muted tabular">+{money(hp.daily)} ese día</p>
+          <p className="text-sm font-semibold text-ink tabular">{money(hp.cumulative, currency)}</p>
+          <p className="text-[11px] text-muted tabular">+{money(hp.daily, currency)} ese día</p>
         </div>
       )}
     </div>

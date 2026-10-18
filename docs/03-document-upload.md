@@ -36,7 +36,7 @@ Después de cambiar `.env`, reinicia el backend.
 | Confianza < mínimo o con avisos (moneda deducida, sin vencimiento…) | **Escalada** (regla `document_extraction`) |
 | Sin fecha de vencimiento | Se usa la de emisión (o hoy) y se añade un aviso → escalada |
 | Falta proveedor, número, total o moneda | Documento `failed`; no se crea factura |
-| Misma factura (proveedor + número) ya registrada | Documento `failed` con el motivo |
+| Misma factura (proveedor + número) ya registrada | Se registra y el agente la **bloquea** (regla `duplicate_invoice`), indicando cuál es la original |
 | Mismo archivo ya procesado | `409` sin volver a llamar al modelo |
 | Mismo archivo que antes falló | Se **reintenta** (útil tras configurar la API key) |
 | Formato no soportado / vacío / demasiado grande | `415` / `422` / `413` |

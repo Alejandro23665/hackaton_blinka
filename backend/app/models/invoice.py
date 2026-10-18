@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import CheckConstraint, Column, DateTime, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, Column, DateTime, Index, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -12,8 +12,8 @@ INVOICE_STATUSES = ("pending", "approved", "blocked", "escalated", "paid")
 class Invoice(SQLModel, table=True):
     __tablename__ = "invoices"
     __table_args__ = (
-        # Evita pagar dos veces la misma factura del mismo proveedor
-        UniqueConstraint("vendor_id", "invoice_number", name="uq_invoices_vendor_number"),
+        # Sin UNIQUE: un duplicado se guarda y el agente lo bloquea (regla duplicate_invoice)
+        Index("ix_invoices_vendor_number", "vendor_id", "invoice_number"),
         CheckConstraint("amount > 0", name="ck_invoices_amount_positive"),
         CheckConstraint(
             "status IN ('pending', 'approved', 'blocked', 'escalated', 'paid')",

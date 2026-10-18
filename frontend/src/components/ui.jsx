@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { STATUS } from '../format'
 import Icon from './icons'
 
@@ -147,6 +148,75 @@ export function Toggle({ checked, onChange, disabled, label }) {
         className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow-control transition-transform duration-150 ${checked ? 'translate-x-5' : ''}`}
       />
     </button>
+  )
+}
+
+/**
+ * Botón de eliminar con confirmación en dos pasos (sin diálogos del navegador).
+ * onConfirm debe devolver una promesa; los errores los muestra quien lo usa.
+ */
+export function ConfirmDelete({ label, warning, onConfirm, className = '' }) {
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!confirming) return
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation() // no cerrar también un panel que esté detrás
+      setConfirming(false)
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [confirming])
+
+  async function confirm() {
+    setBusy(true)
+    try {
+      await onConfirm()
+    } finally {
+      setBusy(false)
+      setConfirming(false)
+    }
+  }
+
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        aria-label={label}
+        title={label}
+        onClick={() => setConfirming(true)}
+        className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-subtle transition-colors hover:bg-danger-50 hover:text-danger-600 ${className}`}
+      >
+        <Icon name="trash" size={16} />
+      </button>
+    )
+  }
+
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      // Cubre toda la fila/tarjeta contenedora (que debe ser `relative`) mientras se confirma
+      className={`absolute inset-0 z-10 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-[inherit] bg-danger-50 px-4 py-2 sm:px-5 ${className}`}
+    >
+      <span className="min-w-0 text-[13px] font-medium text-danger-700">{warning ?? '¿Eliminar?'}</span>
+      <div className="flex gap-1.5">
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirming(false)} className="!h-7">
+          Cancelar
+        </Button>
+        <button
+          type="button"
+          autoFocus
+          disabled={busy}
+          onClick={confirm}
+          className="inline-flex h-7 items-center rounded-control bg-danger-600 px-3 text-[13px] font-medium text-white transition-colors hover:bg-danger-700 disabled:opacity-50"
+        >
+          {busy ? 'Eliminando…' : 'Eliminar'}
+        </button>
+      </div>
+    </div>
   )
 }
 

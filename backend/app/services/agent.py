@@ -7,7 +7,7 @@ from sqlmodel import Session, col, select
 
 from app.core.config import settings
 from app.models import Decision, Invoice, Policy, Vendor
-from app.services import rules
+from app.services import fx, rules
 
 # Estados que cuentan como dinero comprometido en el presupuesto
 SPENT_STATUSES = ("approved", "paid")
@@ -27,30 +27,60 @@ def period_start(period: str, now: datetime) -> datetime:
 
 
 def spent_in_period(
-    session: Session, policy: Policy, now: datetime, exclude_invoice_id: int | None = None
-) -> Decimal:
-    """Suma de facturas aprobadas/pagadas desde el inicio del periodo.
+    session: Session,
+    policy: Policy,
+    now: datetime,
+    exclude_invoice_id: int | None = None,
+    rates: fx.Rates | None = None,
+) -> tuple[Decimal, list[str]]:
+    """Suma, en la moneda base de la política, de las facturas aprobadas/pagadas del periodo.
 
-    MVP: se asume una sola moneda base para el presupuesto.
+    Devuelve (total, monedas_sin_tipo_de_cambio). Las facturas en monedas que no se pueden
+    convertir no se suman: se informan para que el presupuesto quede "no comprobable".
     """
-    query = select(func.coalesce(func.sum(Invoice.amount), 0)).where(
-        col(Invoice.status).in_(SPENT_STATUSES),
-        col(Invoice.created_at) >= period_start(policy.period, now),
+    rates = rates if rates is not None else fx.load_rates(session)
+    query = (
+        select(Invoice.currency, func.sum(Invoice.amount))
+        .where(
+            col(Invoice.status).in_(SPENT_STATUSES),
+            col(Invoice.created_at) >= period_start(policy.period, now),
+        )
+        .group_by(Invoice.currency)
     )
     if exclude_invoice_id is not None:
         query = query.where(Invoice.id != exclude_invoice_id)
-    return Decimal(session.exec(query).one())
+
+    total, missing = Decimal(0), []
+    for currency, amount in session.exec(query).all():
+        conv = fx.convert(amount, currency, policy.base_currency, rates)
+        if conv.ok:
+            total += conv.converted
+        else:
+            missing.append(currency)
+    return total, sorted(missing)
 
 
 def evaluate_invoice(session: Session, invoice: Invoice) -> Decision:
     """Evalúa la factura con la política activa, guarda la decisión y actualiza su estado."""
     vendor = session.get(Vendor, invoice.vendor_id)
     policy = get_active_policy(session)
-    spent = (
-        spent_in_period(session, policy, datetime.now(UTC), exclude_invoice_id=invoice.id)
+    rates = fx.load_rates(session)
+    spent, spent_missing = (
+        spent_in_period(session, policy, datetime.now(UTC), exclude_invoice_id=invoice.id, rates=rates)
         if policy is not None
-        else Decimal(0)
+        else (Decimal(0), [])
     )
+
+    # Otra factura anterior con el mismo número y proveedor => esta es un duplicado
+    duplicate_of = session.exec(
+        select(Invoice)
+        .where(
+            Invoice.vendor_id == invoice.vendor_id,
+            Invoice.invoice_number == invoice.invoice_number,
+            col(Invoice.id) < invoice.id,
+        )
+        .order_by(col(Invoice.id))
+    ).first()
 
     # Facturas leídas de un archivo: la calidad de la extracción también cuenta
     raw = invoice.raw_data or {}
@@ -63,6 +93,9 @@ def evaluate_invoice(session: Session, invoice: Invoice) -> Decision:
         spent,
         extraction=extraction,
         min_confidence=settings.EXTRACTION_MIN_CONFIDENCE,
+        duplicate_of=duplicate_of,
+        rates=rates,
+        spent_missing=spent_missing,
     )
 
     decision = Decision(

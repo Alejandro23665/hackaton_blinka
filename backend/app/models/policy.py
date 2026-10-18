@@ -24,6 +24,8 @@ class Policy(SQLModel, table=True):
     max_amount_per_invoice: Decimal = Field(max_digits=14, decimal_places=2)
     period_budget: Decimal = Field(max_digits=14, decimal_places=2)
     period: str = Field(default="monthly", max_length=20)
+    # Moneda en la que se expresan los límites y el presupuesto; las facturas se convierten a ella
+    base_currency: str = Field(default="USD", max_length=3, sa_column_kwargs={"server_default": "USD"})
     require_human_above: Decimal = Field(max_digits=14, decimal_places=2)
     allowed_currencies: list[str] = Field(
         default_factory=list, sa_column=Column(JSONB, nullable=False)

@@ -5,9 +5,11 @@ import { useLoad } from '../hooks'
 import Icon from './icons'
 import ReviewForm from './ReviewForm'
 import RulesList from './RulesList'
-import { Button, ErrorBox, IconButton, Loading, StatusBadge } from './ui'
+import { Button, ConfirmDelete, ErrorBox, IconButton, Loading, StatusBadge } from './ui'
 
 const REEVALUABLE = ['pending', 'escalated', 'blocked']
+// Las aprobadas/pagadas son dinero comprometido: no se borran (igual que en la API)
+const DELETABLE = ['pending', 'escalated', 'blocked']
 
 const VERDICT = {
   approved: {
@@ -250,11 +252,21 @@ function InvoiceForm({ invoice }) {
   )
 }
 
-function DetailBody({ invoice, refresh }) {
+function DetailBody({ invoice, refresh, onDeleted }) {
   const [actionError, setActionError] = useState(null)
   const [busy, setBusy] = useState(false)
   const latestAgent = [...invoice.decisions].reverse().find((d) => d.decided_by === 'agent')
   const history = [...invoice.decisions].reverse()
+
+  async function remove() {
+    setActionError(null)
+    try {
+      await api.invoices.remove(invoice.id)
+      onDeleted()
+    } catch (e) {
+      setActionError(e.message)
+    }
+  }
 
   async function reevaluate() {
     setBusy(true)
@@ -321,6 +333,20 @@ function DetailBody({ invoice, refresh }) {
         </details>
       )}
 
+      {DELETABLE.includes(invoice.status) && (
+        <section className="relative flex items-center justify-between gap-3 rounded-control border border-line px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-[13px] font-medium text-ink">Eliminar factura</p>
+            <p className="text-xs text-muted">Borra también sus decisiones{invoice.document ? ' y el archivo subido' : ''}.</p>
+          </div>
+          <ConfirmDelete
+            label={`Eliminar la factura ${invoice.invoice_number}`}
+            warning={`¿Eliminar la factura ${invoice.invoice_number} y su historial?`}
+            onConfirm={remove}
+          />
+        </section>
+      )}
+
       <details className="group rounded-control border border-line">
         <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[13px] font-medium text-muted hover:text-ink">
           <Icon name="code" size={16} />
@@ -380,7 +406,16 @@ export default function InvoiceDetail({ invoiceId, onClose, onChange }) {
     <>
       {loading && !invoice && <Loading rows={4} />}
       <ErrorBox message={error} />
-      {invoice && <DetailBody invoice={invoice} refresh={refresh} />}
+      {invoice && (
+        <DetailBody
+          invoice={invoice}
+          refresh={refresh}
+          onDeleted={() => {
+            onChange?.()
+            onClose()
+          }}
+        />
+      )}
     </>
   )
 

@@ -12,7 +12,10 @@ const DOC_STATUS = {
   processing: { label: 'Leyendo…', className: 'bg-brand-100 text-brand-800' },
   processed: { label: 'Procesada', className: 'bg-success-50 text-success-700' },
   failed: { label: 'No se pudo leer', className: 'bg-danger-50 text-danger-700' },
+  not_invoice: { label: 'No es una factura', className: 'bg-surface-strong text-muted' },
 }
+
+const isNotInvoice = (doc) => doc.status === 'failed' && doc.error?.startsWith('El archivo no es una factura')
 
 /** Subida de facturas: el agente lee el archivo, crea la factura y la evalúa. */
 export default function UploadCard({ version, onChange, openInvoice }) {
@@ -109,7 +112,7 @@ export default function UploadCard({ version, onChange, openInvoice }) {
           <p className="mb-2 text-xs font-medium text-muted">Últimas subidas</p>
           <ul className="divide-y divide-line rounded-control border border-line">
             {documents.data.map((doc) => {
-              const s = DOC_STATUS[doc.status]
+              const s = DOC_STATUS[isNotInvoice(doc) ? 'not_invoice' : doc.status]
               const clickable = doc.invoice_id != null
               const body = (
                 <>

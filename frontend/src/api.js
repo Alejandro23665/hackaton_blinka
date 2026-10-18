@@ -31,6 +31,7 @@ export const api = {
     list: () => request('/vendors'),
     create: (data) => request('/vendors', { method: 'POST', body: data }),
     update: (id, data) => request(`/vendors/${id}`, { method: 'PATCH', body: data }),
+    remove: (id) => request(`/vendors/${id}`, { method: 'DELETE' }),
   },
   policies: {
     list: () => request('/policies'),
@@ -38,6 +39,7 @@ export const api = {
     budget: () => request('/policies/active/budget'),
     create: (data) => request('/policies', { method: 'POST', body: data }),
     activate: (id) => request(`/policies/${id}/activate`, { method: 'POST' }),
+    remove: (id) => request(`/policies/${id}`, { method: 'DELETE' }),
   },
   invoices: {
     list: (params) => request('/invoices', { params }),
@@ -45,6 +47,12 @@ export const api = {
     create: (data) => request('/invoices', { method: 'POST', body: data }),
     evaluate: (id) => request(`/invoices/${id}/evaluate`, { method: 'POST' }),
     review: (id, data) => request(`/invoices/${id}/review`, { method: 'POST', body: data }),
+    remove: (id) => request(`/invoices/${id}`, { method: 'DELETE' }),
+  },
+  exchangeRates: {
+    list: () => request('/exchange-rates'),
+    save: (currency, usdPerUnit) => request(`/exchange-rates/${currency}`, { method: 'PUT', body: { usd_per_unit: usdPerUnit } }),
+    remove: (currency) => request(`/exchange-rates/${currency}`, { method: 'DELETE' }),
   },
   decisions: {
     list: (params) => request('/decisions', { params }),
