@@ -184,6 +184,8 @@ class Normalized:
     provider_rut: str | None
     rut_is_substitute: bool
     issues: list[dict] = field(default_factory=list)
+    # IVA por separado (si hay una línea de IVA legible): permite comprobar el 19 % aunque haya otros impuestos
+    vat_amount: Decimal | None = None
 
 
 def normalize_field(name: str, status: str, raw_text: str | None, confidence: float | None, region_index: int | None) -> NormalizedField:
@@ -210,8 +212,42 @@ def normalize_field(name: str, status: str, raw_text: str | None, confidence: fl
     return item
 
 
+def normalize_tax_lines(lines: list[dict]) -> tuple[NormalizedField, Decimal | None]:
+    """Impuestos = suma de todas las líneas (IVA, ILL, adicionales…). La suma la hace el código.
+
+    Sin líneas: AUSENTE. Si alguna línea no se lee, el total de impuestos queda ILEGIBLE: sumar solo las
+    legibles daría un monto falso. Devuelve también el IVA (la suma de las líneas cuyo nombre dice IVA).
+    """
+    if not lines:
+        return NormalizedField("TAX_AMOUNT", "AUSENTE", None, None, None, None), None
+    parsed = [
+        (
+            line.get("label") or "impuesto",
+            normalize_field(
+                "TAX_AMOUNT", line.get("status", "ILEGIBLE"), line.get("raw_text"),
+                line.get("confidence"), line.get("region_index"),
+            ),
+        )
+        for line in lines
+    ]
+    raw = " + ".join(f"{label}: {item.raw_text or '?'}" for label, item in parsed)
+    confidences = [item.confidence for _, item in parsed if item.confidence is not None]
+    region = next((item.region_index for _, item in parsed if item.region_index), None)
+    result = NormalizedField("TAX_AMOUNT", "LEIDO", None, raw, min(confidences) if confidences else None, region)
+    unreadable = [(label, item) for label, item in parsed if item.status != "LEIDO"]
+    if unreadable:
+        label, item = unreadable[0]
+        result.status, result.invalid_reason = "ILEGIBLE", f"no se pudo leer {label} ({item.invalid_reason})"
+        return result, None
+    result.value = sum((item.value for _, item in parsed), Decimal(0))
+    vat = [item.value for label, item in parsed if "IVA" in _plain(label)]
+    return result, (sum(vat, Decimal(0)) if vat else None)
+
+
 def _from_reading(name: str, fields: dict[str, dict]) -> NormalizedField:
     given = fields.get(name) or {"status": "AUSENTE"}
+    if "lines" in given:
+        return normalize_tax_lines(given["lines"])[0]
     return normalize_field(
         name, given.get("status", "AUSENTE"), given.get("raw_text"), given.get("confidence"), given.get("region_index")
     )
@@ -245,6 +281,7 @@ def normalize_extraction(fields: dict[str, dict], check: dict[str, dict] | None 
 
     `check`: una segunda lectura independiente (misma forma). Si se da, los campos en los que las
     dos lecturas no coinciden quedan ILEGIBLE con la alerta LECTURA_INCONSISTENTE.
+    TAX_AMOUNT puede venir como {"lines": [...]} (cada línea de impuesto): se suma con normalize_tax_lines.
     """
     result: dict[str, NormalizedField] = {}
     issues: list[dict] = []
@@ -302,9 +339,14 @@ def normalize_extraction(fields: dict[str, dict], check: dict[str, dict] | None 
                 "details": {"raw_text": rut.raw_text, "confidence": rut.confidence},
             }
         )
+    vat = None
+    tax_given = fields.get("TAX_AMOUNT") or {}
+    if "lines" in tax_given and result["TAX_AMOUNT"].status == "LEIDO":
+        vat = normalize_tax_lines(tax_given["lines"])[1]
     return Normalized(
         fields=result,
         provider_rut=SUBSTITUTE_RUT if substitute else rut.value,
         rut_is_substitute=substitute,
         issues=issues,
+        vat_amount=vat,
     )

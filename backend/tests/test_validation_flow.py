@@ -182,3 +182,21 @@ def test_signature_seen_by_only_one_reading_is_not_accepted(client, fake_ai):
 def test_unknown_documents_have_no_signature_analysis(client, fake_ai):
     (document,) = _lot(client, ("x.png", image_bytes(), "image/png"))["documents"]
     assert document["has_signature"] is None
+
+
+def test_hidden_additional_tax_makes_the_document_not_legible(client, fake_ai):
+    from tests.factories import tax_line
+
+    fake_ai.pages = {1: page_response(detected("CONTROL_INTERNO", "CONTROL INTERNO/FALTANTE", "1.352.386"))}
+    fake_ai.extractions = [
+        extraction(
+            DOCUMENT_NUMBER=reading("N° 1.352.386"),
+            NET_AMOUNT=reading("$ 2.267"),
+            TOTAL_AMOUNT=reading("$ 2.925"),
+            tax_lines=[tax_line("431"), tax_line("?", label="ILL(10,0%)", status="ILEGIBLE", confidence=0.1)],
+        )
+    ]
+    lot = _lot(client, ("faltante.png", image_bytes(), "image/png"))
+    run = _detail(client, lot["documents"][0]["id"])["run"]
+    assert (run["overall_status"], run["validation_status"], run["tax_amount"]) == ("NO_LEGIBLE", "INCOMPLETA", None)
+    assert run["document_number"] == "1352386"

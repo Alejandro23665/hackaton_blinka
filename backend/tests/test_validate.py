@@ -127,3 +127,27 @@ def test_vat_different_from_19_percent_is_a_warning_not_a_mismatch():
     # Solo en facturas electrónicas
     other = _case("CONTROL_INTERNO", TAX_AMOUNT=("LEIDO", Decimal(25000)), TOTAL_AMOUNT=("LEIDO", Decimal(125000)))
     assert other.issues == []
+
+
+def test_vat_check_uses_vat_alone_when_there_are_other_taxes():
+    # Neto 2.267: IVA 431 + ILL 227 = 658 de impuestos; el IVA sí es el 19 %
+    fields = {
+        "NET_AMOUNT": ("LEIDO", Decimal(2267)),
+        "TAX_AMOUNT": ("LEIDO", Decimal(658)),
+        "TOTAL_AMOUNT": ("LEIDO", Decimal(2925)),
+    }
+    statuses = {name: status for name, (status, _) in {**_base(), **fields}.items()}
+    values = {name: value for name, (_, value) in {**_base(), **fields}.items()}
+    with_vat = validate("FACTURA_ELECTRONICA", statuses, values, ZERO, vat=Decimal(431))
+    assert (with_vat.overall_status, with_vat.issues) == ("PROCESADO", [])
+    without_vat = validate("FACTURA_ELECTRONICA", statuses, values, ZERO)
+    assert _codes(without_vat) == ["IVA_NO_CORRESPONDE_19"]
+
+
+def _base():
+    return {
+        "PROVIDER_RUT": ("LEIDO", "76084682-1"),
+        "DOCUMENT_NUMBER": ("LEIDO", "1352386"),
+        "ISSUE_DATE": ("LEIDO", date(2026, 10, 19)),
+        "EXEMPT_AMOUNT": ("LEIDO", ZERO),
+    }

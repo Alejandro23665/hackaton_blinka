@@ -34,6 +34,10 @@ Lote ─► Recepción (originales + sha256) ─► Preprocesador ─► página
 - **RUT ilegible** (o con dígito verificador incorrecto): se guarda `1-9` con `rut_is_substitute`.
 - **Suma:** neto + impuestos + exento = total, con tolerancia `TOTAL_TOLERANCE_CLP` (0). Un
   opcional ausente no suma; uno ilegible deja la validación `INCOMPLETA` (nunca `DESCUADRE`).
+- **Impuestos = suma de todas las líneas de impuesto** (IVA, ILL, impuesto adicional…). El extractor
+  lee cada línea por separado y el código las suma; si alguna no se lee (por ejemplo, tapada por una
+  perforación), Impuestos queda `ILEGIBLE`. El IVA se guarda aparte (`vat_amount`) para comprobar el
+  19 % aunque haya otros impuestos.
 
 ## Lecturas no fiables: doble lectura
 

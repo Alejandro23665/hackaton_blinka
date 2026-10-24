@@ -14,7 +14,7 @@ from app.ai import client
 from app.core.config import settings
 from app.models.enums import FIELD_NAMES
 
-PROMPT_VERSION = "ext-5"
+PROMPT_VERSION = "ext-6"
 # Margen alrededor de la zona del documento al recortarla (proporción de la página)
 CROP_MARGIN = 0.03
 
@@ -33,14 +33,27 @@ class SignatureReading(BaseModel):
     description: str | None
 
 
+# TAX_AMOUNT no lo lee la IA: el código lo calcula sumando las líneas de impuesto
+READ_FIELDS = tuple(name for name in FIELD_NAMES if name != "TAX_AMOUNT")
+
+
+class TaxLine(BaseModel):
+    label: str
+    status: Literal["LEIDO", "ILEGIBLE"]
+    raw_text: str | None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    region_index: int | None
+
+
 class Extraction(BaseModel):
-    fields: dict[Literal[FIELD_NAMES], FieldReading]  # type: ignore[valid-type]
+    fields: dict[Literal[READ_FIELDS], FieldReading]  # type: ignore[valid-type]
+    tax_lines: list[TaxLine]
     signature: SignatureReading
     transcription: str
     notes: str | None
 
     def model_post_init(self, __context) -> None:
-        missing = set(FIELD_NAMES) - set(self.fields)
+        missing = set(READ_FIELDS) - set(self.fields)
         if missing:
             raise ValueError(f"faltan campos en la respuesta: {sorted(missing)}")
 
@@ -60,13 +73,29 @@ _FIELD_SCHEMA = {
 RESPONSE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["fields", "signature", "transcription", "notes"],
+    "required": ["fields", "tax_lines", "signature", "transcription", "notes"],
     "properties": {
         "fields": {
             "type": "object",
             "additionalProperties": False,
-            "required": list(FIELD_NAMES),
-            "properties": {name: _FIELD_SCHEMA for name in FIELD_NAMES},
+            "required": list(READ_FIELDS),
+            "properties": {name: _FIELD_SCHEMA for name in READ_FIELDS},
+        },
+        "tax_lines": {
+            "type": "array",
+            "description": "Cada línea de impuesto del documento (IVA, ILL, impuesto adicional…); vacía si no hay",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["label", "status", "raw_text", "confidence", "region_index"],
+                "properties": {
+                    "label": {"type": "string", "description": "Nombre del impuesto tal como aparece, p. ej. \"IVA 19%\""},
+                    "status": {"type": "string", "enum": ["LEIDO", "ILEGIBLE"]},
+                    "raw_text": {"type": ["string", "null"], "description": "Monto exacto; usa ? en lo que no se lee"},
+                    "confidence": {"type": ["number", "null"]},
+                    "region_index": {"type": ["integer", "null"]},
+                },
+            },
         },
         "signature": {
             "type": "object",
@@ -92,9 +121,10 @@ no el del cliente o receptor.
 - DOCUMENT_NUMBER: número o folio del documento (el "N°" del recuadro).
 - ISSUE_DATE: fecha de emisión.
 - NET_AMOUNT: monto neto.
-- TAX_AMOUNT: impuestos (IVA y otros impuestos, si los hay).
 - EXEMPT_AMOUNT: monto exento.
 - TOTAL_AMOUNT: monto total.
+
+Y aparte, en tax_lines, CADA línea de impuesto por separado: IVA, ILL (impuesto a licores), impuesto adicional, impuesto específico, etc. Una entrada por línea, con su nombre (label) y su monto (raw_text). No las sumes ni incluyas neto, exento ni total. Si el monto de una línea está tapado (por ejemplo, por una perforación o un timbre) o no se lee, igualmente inclúyela con status ILEGIBLE y ? en lo que no se ve. Si el documento no tiene ninguna línea de impuesto, tax_lines es una lista vacía.
 
 Para cada campo devuelve:
 - status: LEIDO si aparece y lo lees con seguridad; AUSENTE si no aparece en el documento; \

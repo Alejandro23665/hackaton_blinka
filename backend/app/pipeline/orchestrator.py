@@ -365,6 +365,13 @@ def _read(session: Session, run: ProcessingRun, step: str, images: list, tempera
     return result
 
 
+def _readings(extraction: extractor.Extraction) -> dict[str, dict]:
+    """Lecturas por campo para el normalizador; los impuestos van como líneas para que el código los sume."""
+    readings = {name: reading.model_dump() for name, reading in extraction.fields.items()}
+    readings["TAX_AMOUNT"] = {"lines": [line.model_dump() for line in extraction.tax_lines]}
+    return readings
+
+
 def _signature(run: ProcessingRun, first: extractor.SignatureReading, second) -> list[dict]:
     """Fija si el documento está firmado. Con segunda lectura, solo cuenta si ambas ven la firma:
     dar por recibido algo sin firma es peor que pedir revisarlo. Devuelve las alertas."""
@@ -401,11 +408,11 @@ def _extract(session: Session, run: ProcessingRun, regions: list[DocumentRegion]
         second = _read(session, run, "VERIFICACION", images, temperature=settings.VERIFY_TEMPERATURE)
         if second is None:
             return False
-        check = {name: reading.model_dump() for name, reading in second.parsed.fields.items()}
+        check = _readings(second.parsed)
         second_signature = second.parsed.signature
 
     extraction: extractor.Extraction = result.parsed
-    normalized = normalize_extraction({name: reading.model_dump() for name, reading in extraction.fields.items()}, check)
+    normalized = normalize_extraction(_readings(extraction), check)
     required = required_fields(run.doc_type, {name: f.status for name, f in normalized.fields.items()})
     for name, item in normalized.fields.items():
         index = item.region_index
@@ -432,6 +439,7 @@ def _extract(session: Session, run: ProcessingRun, regions: list[DocumentRegion]
     run.issue_date = values["ISSUE_DATE"]
     run.net_amount = values["NET_AMOUNT"]
     run.tax_amount = values["TAX_AMOUNT"]
+    run.vat_amount = normalized.vat_amount
     run.exempt_amount = values["EXEMPT_AMOUNT"]
     run.total_amount = values["TOTAL_AMOUNT"]
     run.ocr_text = extraction.transcription
@@ -479,7 +487,7 @@ def _validate_run(session: Session, run: ProcessingRun) -> bool:
             "EXEMPT_AMOUNT": run.exempt_amount,
             "TOTAL_AMOUNT": run.total_amount,
         }
-        result = validate(run.doc_type, statuses, values, run.total_tolerance)
+        result = validate(run.doc_type, statuses, values, run.total_tolerance, vat=run.vat_amount)
         issues = list(result.issues)
         duplicates = _possible_duplicates(session, run)
         if duplicates:

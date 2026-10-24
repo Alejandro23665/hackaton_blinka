@@ -122,6 +122,7 @@ class RunRead(ReadModel):
     issue_date: date | None
     net_amount: Decimal | None
     tax_amount: Decimal | None
+    vat_amount: Decimal | None
     exempt_amount: Decimal | None
     total_amount: Decimal | None
     calculated_total: Decimal | None

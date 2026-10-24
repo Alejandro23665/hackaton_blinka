@@ -14,9 +14,14 @@ from app.pipeline.normalize import (
     rut_check_digit,
 )
 from app.pipeline.validate import required_fields
-from tests.factories import ABSENT, extraction, reading
+from tests.factories import ABSENT, extraction, readings, reading, tax_line
 
 TODAY = date(2026, 10, 24)
+
+
+def fields(**kwargs):
+    """Lecturas por campo de una extracción simulada, listas para normalize_extraction."""
+    return readings(extraction(**kwargs))
 
 
 @pytest.mark.parametrize(
@@ -103,10 +108,10 @@ def test_document_number_keeps_leading_zeros():
 
 def test_absent_is_not_zero_and_illegible_keeps_original_text():
     result = normalize_extraction(
-        extraction(
+        fields(
             EXEMPT_AMOUNT=ABSENT,
             ISSUE_DATE=reading("0?/03/2026", status="ILEGIBLE", confidence=0.3),
-        )["fields"]
+        )
     )
     exempt, issue_date = result.fields["EXEMPT_AMOUNT"], result.fields["ISSUE_DATE"]
     assert (exempt.status, exempt.value) == ("AUSENTE", None)
@@ -116,10 +121,10 @@ def test_absent_is_not_zero_and_illegible_keeps_original_text():
 
 def test_low_confidence_or_unparseable_reading_becomes_illegible():
     result = normalize_extraction(
-        extraction(
+        fields(
             NET_AMOUNT=reading("$ 100.000", confidence=settings.FIELD_MIN_CONFIDENCE - 0.05),
             TOTAL_AMOUNT=reading("ciento diecinueve mil"),
-        )["fields"]
+        )
     )
     assert result.fields["NET_AMOUNT"].status == "ILEGIBLE" and "confianza" in result.fields["NET_AMOUNT"].invalid_reason
     assert result.fields["TOTAL_AMOUNT"].status == "ILEGIBLE"
@@ -131,18 +136,18 @@ def test_low_confidence_or_unparseable_reading_becomes_illegible():
     [reading("76.123.456-K"), reading("76.1??.456-0", status="ILEGIBLE", confidence=0.2), ABSENT],
 )
 def test_unrecoverable_rut_is_stored_as_substitute(rut):
-    result = normalize_extraction(extraction(PROVIDER_RUT=rut)["fields"])
+    result = normalize_extraction(fields(PROVIDER_RUT=rut))
     assert (result.provider_rut, result.rut_is_substitute) == ("1-9", True)
     assert result.issues[0]["code"] == "RUT_SUSTITUTO"
 
 
 def test_real_rut_is_not_substitute():
-    result = normalize_extraction(extraction()["fields"])
+    result = normalize_extraction(fields())
     assert (result.provider_rut, result.rut_is_substitute, result.issues) == ("76123456-0", False, [])
 
 
 def test_decimal_amount_is_flagged():
-    result = normalize_extraction(extraction(TAX_AMOUNT=reading("19.000,40"))["fields"])
+    result = normalize_extraction(fields(TAX_AMOUNT=reading("19.000,40")))
     assert result.fields["TAX_AMOUNT"].value == Decimal("19000.40")
     assert [i["code"] for i in result.issues] == ["MONTO_CON_DECIMALES"]
 
@@ -159,17 +164,17 @@ def test_required_fields_depend_on_document_type():
 
 
 def test_matching_second_reading_keeps_the_fields():
-    first = extraction()["fields"]
+    first = fields()
     # Mismo dato escrito de otra forma: lo que se compara es el valor normalizado
-    second = extraction(ISSUE_DATE=reading("14/10/2026"), DOCUMENT_NUMBER=reading("000123"))["fields"]
+    second = fields(ISSUE_DATE=reading("14/10/2026"), DOCUMENT_NUMBER=reading("000123"))
     result = normalize_extraction(first, second)
     assert all(f.status != "ILEGIBLE" for f in result.fields.values()) and result.issues == []
 
 
 def test_guessed_date_that_changes_between_readings_becomes_illegible():
     # Caso real: fecha diminuta y borrosa leída como 10.10.2025 con 90 % de "confianza"
-    first = extraction(ISSUE_DATE=reading("10.10.2025", confidence=0.9))["fields"]
-    second = extraction(ISSUE_DATE=reading("18-10-2026", confidence=0.8))["fields"]
+    first = fields(ISSUE_DATE=reading("10.10.2025", confidence=0.9))
+    second = fields(ISSUE_DATE=reading("18-10-2026", confidence=0.8))
     result = normalize_extraction(first, second)
     date_field = result.fields["ISSUE_DATE"]
     assert (date_field.status, date_field.value, date_field.raw_text) == ("ILEGIBLE", None, "10.10.2025")
@@ -180,21 +185,46 @@ def test_guessed_date_that_changes_between_readings_becomes_illegible():
 
 def test_second_reading_that_cannot_read_or_find_the_field_is_a_disagreement():
     unreadable = normalize_extraction(
-        extraction()["fields"], extraction(TOTAL_AMOUNT=reading("1?9.000", status="ILEGIBLE", confidence=0.3))["fields"]
+        fields(), fields(TOTAL_AMOUNT=reading("1?9.000", status="ILEGIBLE", confidence=0.3))
     )
     assert unreadable.fields["TOTAL_AMOUNT"].status == "ILEGIBLE"
-    found_once = normalize_extraction(extraction()["fields"], extraction(EXEMPT_AMOUNT=reading("$ 5.000"))["fields"])
+    found_once = normalize_extraction(fields(), fields(EXEMPT_AMOUNT=reading("$ 5.000")))
     assert found_once.fields["EXEMPT_AMOUNT"].status == "ILEGIBLE"
     assert "no lo encontró" in found_once.fields["EXEMPT_AMOUNT"].invalid_reason
 
 
 def test_second_reading_never_rescues_a_field():
-    first = extraction(ISSUE_DATE=reading("0?/10/2026", status="ILEGIBLE", confidence=0.3))["fields"]
-    result = normalize_extraction(first, extraction()["fields"])
+    first = fields(ISSUE_DATE=reading("0?/10/2026", status="ILEGIBLE", confidence=0.3))
+    result = normalize_extraction(first, fields())
     assert result.fields["ISSUE_DATE"].status == "ILEGIBLE"
 
 
 def test_inconsistent_rut_becomes_substitute():
-    result = normalize_extraction(extraction()["fields"], extraction(PROVIDER_RUT=reading("76.123.465-K"))["fields"])
+    result = normalize_extraction(fields(), fields(PROVIDER_RUT=reading("76.123.465-K")))
     assert (result.provider_rut, result.rut_is_substitute) == ("1-9", True)
     assert sorted(i["code"] for i in result.issues) == ["LECTURA_INCONSISTENTE", "RUT_SUSTITUTO"]
+
+
+# --- Impuestos: suma de líneas ----------------------------------------------------------------
+
+
+def test_taxes_are_the_sum_of_all_tax_lines_and_vat_is_kept_apart():
+    result = normalize_extraction(fields(tax_lines=[tax_line("$ 431"), tax_line("$ 227", label="ILL(10,0%)")]))
+    tax = result.fields["TAX_AMOUNT"]
+    assert (tax.status, tax.value, tax.raw_text) == ("LEIDO", Decimal(658), "IVA 19%: $ 431 + ILL(10,0%): $ 227")
+    assert result.vat_amount == Decimal(431)
+
+
+def test_one_unreadable_tax_line_makes_taxes_illegible():
+    # Caso real: el ILL tapado por una perforación; sumar solo el IVA daría un monto falso
+    result = normalize_extraction(
+        fields(tax_lines=[tax_line("431"), tax_line("?", label="ILL(10,0%)", status="ILEGIBLE", confidence=0.2)])
+    )
+    tax = result.fields["TAX_AMOUNT"]
+    assert (tax.status, tax.value) == ("ILEGIBLE", None)
+    assert "ILL(10,0%)" in tax.invalid_reason and result.vat_amount is None
+
+
+def test_no_tax_lines_means_taxes_absent():
+    result = normalize_extraction(fields(tax_lines=[]))
+    assert (result.fields["TAX_AMOUNT"].status, result.fields["TAX_AMOUNT"].value) == ("AUSENTE", None)

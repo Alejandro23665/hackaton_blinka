@@ -58,8 +58,17 @@ class Validation:
     issues: list[dict] = field(default_factory=list)
 
 
-def validate(doc_type: str, statuses: dict[str, str], values: dict[str, object], tolerance: Decimal) -> Validation:
-    """`statuses` y `values`: estado y valor normalizado de cada campo (None si no hay valor)."""
+def validate(
+    doc_type: str,
+    statuses: dict[str, str],
+    values: dict[str, object],
+    tolerance: Decimal,
+    vat: Decimal | None = None,
+) -> Validation:
+    """`statuses` y `values`: estado y valor normalizado de cada campo (None si no hay valor).
+
+    `vat`: el IVA por separado, si se conoce. Si no, la comprobación del 19 % usa el total de impuestos.
+    """
     issues: list[dict] = []
     reasons: list[str] = []
 
@@ -129,17 +138,19 @@ def validate(doc_type: str, statuses: dict[str, str], values: dict[str, object],
                 validation_status = "CUADRA"
 
     # 3. Alertas que no cambian el estado
-    if doc_type == "FACTURA_ELECTRONICA" and net is not None and tax is not None:
+    vat_read = vat if vat is not None else tax
+    if doc_type == "FACTURA_ELECTRONICA" and net is not None and vat_read is not None:
         expected = (net * VAT_RATE).quantize(Decimal(1), rounding=ROUND_HALF_UP)
-        if abs(tax - expected) > VAT_TOLERANCE:
+        if abs(vat_read - expected) > VAT_TOLERANCE:
+            label = "El IVA" if vat is not None else "Los impuestos"
             issues.append(
                 {
                     "code": "IVA_NO_CORRESPONDE_19",
                     "severity": "ADVERTENCIA",
                     "field_name": "TAX_AMOUNT",
-                    "message": f"Los impuestos ({clp(tax)}) no son el 19 % del neto ({clp(expected)}): "
+                    "message": f"{label} ({clp(vat_read)}) no es el 19 % del neto ({clp(expected)}): "
                     "puede haber otros impuestos o una lectura errónea.",
-                    "details": {"expected_vat": str(expected), "tax": str(tax)},
+                    "details": {"expected_vat": str(expected), "vat": str(vat_read)},
                 }
             )
 

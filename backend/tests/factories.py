@@ -74,20 +74,36 @@ def signature(present=False, confidence=0.9, description=None):
     }
 
 
-def extraction(transcription="FACTURA ELECTRONICA ...", notes=None, signed=False, **fields):
-    """Una factura correcta (100.000 + 19.000 = 119.000); cada campo se puede sustituir por nombre."""
+def tax_line(raw_text, label="IVA 19%", status="LEIDO", confidence=0.95, region_index=1):
+    return {"label": label, "status": status, "raw_text": raw_text, "confidence": confidence, "region_index": region_index}
+
+
+def extraction(transcription="FACTURA ELECTRONICA ...", notes=None, signed=False, tax_lines=None, **fields):
+    """Una factura correcta (100.000 + 19.000 = 119.000); cada campo se puede sustituir por nombre.
+
+    Los impuestos van en `tax_lines`, como los devuelve el extractor. Por comodidad, TAX_AMOUNT=reading(...)
+    equivale a una sola línea de IVA (o a ninguna, si es AUSENTE).
+    """
     base = {
         "PROVIDER_RUT": reading("76.123.456-0"),
         "DOCUMENT_NUMBER": reading("N° 000123"),
         "ISSUE_DATE": reading("14 de octubre de 2026"),
         "NET_AMOUNT": reading("$ 100.000"),
-        "TAX_AMOUNT": reading("$ 19.000"),
         "EXEMPT_AMOUNT": ABSENT,
         "TOTAL_AMOUNT": reading("$ 119.000"),
     }
+    tax = fields.pop("TAX_AMOUNT", reading("$ 19.000"))
+    if tax_lines is None:
+        tax_lines = [] if tax["status"] == "AUSENTE" else [tax_line(tax["raw_text"], status=tax["status"], confidence=tax["confidence"])]
     return {
         "fields": {**base, **fields},
+        "tax_lines": tax_lines,
         "signature": signature(present=signed),
         "transcription": transcription,
         "notes": notes,
     }
+
+
+def readings(data):
+    """Lecturas por campo como las arma el orquestador (los impuestos como líneas)."""
+    return {**data["fields"], "TAX_AMOUNT": {"lines": data["tax_lines"]}}
