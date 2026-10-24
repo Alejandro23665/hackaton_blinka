@@ -5,6 +5,7 @@ from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from app.api.deps import SessionDep
+from app.api.documents import shown_run
 from app.models import (
     DocumentRegion,
     Page,
@@ -97,13 +98,12 @@ def _documents(
     if not by_document:
         return []
 
-    runs: dict[uuid.UUID, ProcessingRun] = {}
+    all_runs: dict[uuid.UUID, list[ProcessingRun]] = {}
     for run in session.exec(
-        select(ProcessingRun)
-        .where(col(ProcessingRun.document_id).in_(list(by_document)))
-        .order_by(col(ProcessingRun.run_number))
+        select(ProcessingRun).where(col(ProcessingRun.document_id).in_(list(by_document)))
     ).all():
-        runs[run.document_id] = run
+        all_runs.setdefault(run.document_id, []).append(run)
+    runs = {document_id: shown_run(items) for document_id, items in all_runs.items()}
     issues: dict[uuid.UUID, list[RunIssue]] = {}
     if runs:
         for issue in session.exec(

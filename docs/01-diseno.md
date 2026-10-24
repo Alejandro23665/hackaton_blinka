@@ -47,6 +47,16 @@ Lote ─► Recepción (originales + sha256) ─► Preprocesador ─► página
 Los problemas secundarios quedan como alertas (`run_issues`): ninguno se pierde por el estado
 principal.
 
+Decisión: si un campo **opcional** es ilegible y por eso no se puede comprobar la suma
+(validación `INCOMPLETA`), el estado general es `NO_LEGIBLE`, no `PROCESADO`: marcarlo procesado
+ocultaría que el total no se pudo verificar.
+
+Alertas: `CAMPO_ILEGIBLE`, `CAMPO_OBLIGATORIO_AUSENTE`, `RUT_SUSTITUTO`, `DESCUADRE`,
+`VALIDACION_INCOMPLETA`, `IVA_NO_CORRESPONDE_19` (solo facturas electrónicas, ±1 peso),
+`POSIBLE_DUPLICADO` (mismo RUT real, tipo y número), `MONTO_CON_DECIMALES`,
+`CLASIFICACION_SIN_EVIDENCIA`, `CLASIFICACION_DUDOSA`, `AGRUPACION_DUDOSA`, `BAJA_CALIDAD_IMAGEN`,
+`REGION_INVALIDA`.
+
 ## Base de datos
 
 | Tabla | Responsabilidad |

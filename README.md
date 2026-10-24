@@ -13,7 +13,7 @@ trazabilidad. Diseño completo en [docs/01-diseno.md](docs/01-diseno.md).
 | 5.1 Base | Modelos, migración, almacenamiento, preprocesador, subida de lotes | Hecha |
 | 5.2 | Segmentador-clasificador (IA) y agrupador | Hecha |
 | 5.3 | Extractor (IA) y normalizador | Hecha |
-| 5.4 | Validador, estados y persistencia | Pendiente |
+| 5.4 | Validador, estados y persistencia | Hecha |
 | 5.5 | Evaluación con muestras reales | Pendiente |
 | 5.6 | Interfaz | Pendiente |
 | 5.7 | Despliegue | Pendiente |
@@ -62,6 +62,7 @@ uvicorn app.main:app --reload    # http://localhost:8000/docs
 | GET | `/submissions/{id}` | Estado del lote, sus archivos, páginas (con su clasificación) y documentos detectados |
 | POST | `/submissions/{id}/process` | Reprocesa: retoma lo pendiente y reintenta lo fallido |
 | GET | `/documents/{id}` | Documento: datos normalizados, estado y texto original de cada campo, alertas, pasos e historial |
+| POST | `/documents/{id}/reprocess` | Vuelve a extraer y validar; el resultado actual sigue vigente hasta que el nuevo termine bien |
 | GET | `/files/{id}` | Archivo original |
 | GET | `/pages/{id}/image` | Imagen de una página (lo que ve la IA) |
 | GET | `/regions/{id}/crop` | Recorte de un documento que comparte página con otros |

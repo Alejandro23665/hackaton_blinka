@@ -1,8 +1,8 @@
 """Orquestador: coordina los pasos del procesamiento de un lote.
 
-Etapa actual: preprocesar cada archivo (páginas), segmentar y clasificar cada página con la IA,
-agrupar las regiones en documentos y, en los admitidos, extraer y normalizar los campos. Los
-documentos desconocidos quedan terminados; los admitidos esperan la validación (etapa 5.4).
+Pasos: preprocesar cada archivo (páginas) → segmentar y clasificar cada página con la IA →
+agrupar las regiones en documentos → en los admitidos, extraer (IA), normalizar y validar →
+guardar los estados y dejar el procesamiento como el actual, en una transacción.
 
 Cada paso es idempotente: volver a procesar un lote retoma lo que quedó pendiente o falló, sin
 duplicar lo que ya estaba hecho.
@@ -35,12 +35,18 @@ from app.pipeline import extractor, segmenter
 from app.pipeline.grouper import GroupedDocument, group_pages
 from app.pipeline.normalize import normalize_extraction
 from app.pipeline.preprocess import PreprocessError, render_pages
-from app.pipeline.validate import required_fields
+from app.pipeline.validate import required_fields, validate
 from app.storage import crop_key, get_storage, page_key
 
-PIPELINE_VERSION = "0.3"
+PIPELINE_VERSION = "0.4"
 # Alertas que vienen de la segmentación y se copian si un documento se vuelve a procesar
-SEGMENTATION_ISSUES = ("CLASIFICACION_SIN_EVIDENCIA", "CLASIFICACION_DUDOSA", "AGRUPACION_DUDOSA", "BAJA_CALIDAD_IMAGEN", "REGION_INVALIDA")
+SEGMENTATION_ISSUES = (
+    "CLASIFICACION_SIN_EVIDENCIA",
+    "CLASIFICACION_DUDOSA",
+    "AGRUPACION_DUDOSA",
+    "BAJA_CALIDAD_IMAGEN",
+    "REGION_INVALIDA",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -250,10 +256,10 @@ def _file_documents(session: Session, stored: StoredFile) -> list[tuple[Document
     ]
 
 
-def _latest_run(session: Session, document: Document) -> ProcessingRun | None:
+def _latest_run(session: Session, document_id: uuid.UUID) -> ProcessingRun | None:
     return session.exec(
         select(ProcessingRun)
-        .where(ProcessingRun.document_id == document.id)
+        .where(ProcessingRun.document_id == document_id)
         .order_by(col(ProcessingRun.run_number).desc())
     ).first()
 
@@ -267,22 +273,23 @@ def _has_extraction(session: Session, run: ProcessingRun) -> bool:
     )
 
 
-def _retry_run(session: Session, failed: ProcessingRun) -> ProcessingRun:
-    """Nuevo procesamiento tras un fallo: conserva la clasificación y sus alertas."""
+def new_run_from(session: Session, previous: ProcessingRun) -> ProcessingRun:
+    """Nuevo procesamiento del documento (tras un fallo o para reprocesarlo): conserva la
+    clasificación y sus alertas; la extracción y la validación se repiten."""
     run = ProcessingRun(
-        document_id=failed.document_id,
-        run_number=failed.run_number + 1,
+        document_id=previous.document_id,
+        run_number=(_latest_run(session, previous.document_id) or previous).run_number + 1,
         pipeline_version=PIPELINE_VERSION,
-        classifier_model=failed.classifier_model,
-        doc_type=failed.doc_type,
-        classification_confidence=failed.classification_confidence,
-        classification_evidence=failed.classification_evidence,
+        classifier_model=previous.classifier_model,
+        doc_type=previous.doc_type,
+        classification_confidence=previous.classification_confidence,
+        classification_evidence=previous.classification_evidence,
         total_tolerance=Decimal(settings.TOTAL_TOLERANCE_CLP),
     )
     session.add(run)
     session.flush()
     for issue in session.exec(
-        select(RunIssue).where(RunIssue.run_id == failed.id, col(RunIssue.code).in_(SEGMENTATION_ISSUES))
+        select(RunIssue).where(RunIssue.run_id == previous.id, col(RunIssue.code).in_(SEGMENTATION_ISSUES))
     ).all():
         session.add(
             RunIssue(
@@ -312,20 +319,33 @@ def _document_images(session: Session, regions: list[DocumentRegion]) -> list[tu
     return images
 
 
-def extract_document(session: Session, document: Document, regions: list[DocumentRegion]) -> bool:
-    """Extrae y normaliza los campos de un documento admitido. True si quedó extraído."""
-    run = _latest_run(session, document)
-    if run is None or run.doc_type in (None, "DESCONOCIDO"):
+def process_document(session: Session, document: Document, regions: list[DocumentRegion]) -> bool:
+    """Lleva un documento admitido hasta el final: extracción, normalización y validación.
+
+    Retoma donde quedó: si ya tiene extracción, solo valida; si el último intento falló, abre un
+    procesamiento nuevo. True si el documento quedó terminado.
+    """
+    run = _latest_run(session, document.id)
+    if run is None or run.doc_type in (None, "DESCONOCIDO") or run.technical_status == "COMPLETADO":
         return True
     if run.technical_status == "FALLIDO":
-        run = _retry_run(session, run)
-    elif run.technical_status == "COMPLETADO" or _has_extraction(session, run):
-        return True
+        run = new_run_from(session, run)
+    if not _has_extraction(session, run) and not _extract(session, run, regions):
+        return False
+    return _validate_run(session, run)
 
+
+def _extract(session: Session, run: ProcessingRun, regions: list[DocumentRegion]) -> bool:
+    """Extrae y normaliza los campos (paso EXTRACCION y NORMALIZACION). True si salió bien."""
     try:
         result = extractor.extract_document(run.doc_type, _document_images(session, regions))
     except AIError as exc:
-        session.add(RunStep(run_id=run.id, step="EXTRACCION", status="ERROR", attempts=0, model=extractor.model_name(), error_message=str(exc)))
+        session.add(
+            RunStep(
+                run_id=run.id, step="EXTRACCION", status="ERROR", attempts=0,
+                model=extractor.model_name(), error_message=str(exc),
+            )
+        )
         run.technical_status = "FALLIDO"
         run.error_code = exc.code
         run.error_message = str(exc)
@@ -384,11 +404,124 @@ def extract_document(session: Session, document: Document, regions: list[Documen
     return True
 
 
-def extract_file(session: Session, stored: StoredFile) -> bool:
+def _possible_duplicates(session: Session, run: ProcessingRun) -> list[ProcessingRun]:
+    """Otros documentos con el mismo RUT, tipo y número (nunca con el RUT de sustitución)."""
+    if run.rut_is_substitute or not run.provider_rut or not run.document_number:
+        return []
+    return list(
+        session.exec(
+            select(ProcessingRun).where(
+                col(ProcessingRun.is_current),
+                ProcessingRun.document_id != run.document_id,
+                ProcessingRun.provider_rut == run.provider_rut,
+                ProcessingRun.doc_type == run.doc_type,
+                ProcessingRun.document_number == run.document_number,
+                col(ProcessingRun.rut_is_substitute).is_(False),
+            )
+        ).all()
+    )
+
+
+def _validate_run(session: Session, run: ProcessingRun) -> bool:
+    """Valida, fija los estados y deja este procesamiento como el actual. Todo en una transacción:
+    si algo falla, el resultado actual anterior (si lo hay) sigue intacto."""
+    try:
+        fields = session.exec(select(ExtractedField).where(ExtractedField.run_id == run.id)).all()
+        statuses = {f.field_name: f.status for f in fields}
+        values = {
+            "PROVIDER_RUT": None if run.rut_is_substitute else run.provider_rut,
+            "DOCUMENT_NUMBER": run.document_number,
+            "ISSUE_DATE": run.issue_date,
+            "NET_AMOUNT": run.net_amount,
+            "TAX_AMOUNT": run.tax_amount,
+            "EXEMPT_AMOUNT": run.exempt_amount,
+            "TOTAL_AMOUNT": run.total_amount,
+        }
+        result = validate(run.doc_type, statuses, values, run.total_tolerance)
+        issues = list(result.issues)
+        duplicates = _possible_duplicates(session, run)
+        if duplicates:
+            issues.append(
+                {
+                    "code": "POSIBLE_DUPLICADO",
+                    "severity": "ADVERTENCIA",
+                    "field_name": "DOCUMENT_NUMBER",
+                    "message": f"Ya hay {len(duplicates)} documento(s) con el mismo RUT, tipo y número: "
+                    "puede ser el mismo documento recibido dos veces.",
+                    "details": {"documents": [str(d.document_id) for d in duplicates]},
+                }
+            )
+
+        for issue in issues:
+            session.add(RunIssue(run_id=run.id, **issue))
+        session.add(
+            RunStep(
+                run_id=run.id, step="VALIDACION", status="OK", attempts=0,
+                output={
+                    "extraction_status": result.extraction_status,
+                    "validation_status": result.validation_status,
+                    "overall_status": result.overall_status,
+                },
+            )
+        )
+        # El resultado actual anterior deja de serlo antes de marcar el nuevo (índice único parcial)
+        for previous in session.exec(
+            select(ProcessingRun).where(
+                ProcessingRun.document_id == run.document_id, col(ProcessingRun.is_current), ProcessingRun.id != run.id
+            )
+        ).all():
+            previous.is_current = False
+            session.add(previous)
+        session.flush()
+
+        run.extraction_status = result.extraction_status
+        run.validation_status = result.validation_status
+        run.overall_status = result.overall_status
+        run.calculated_total = result.calculated_total
+        run.difference = result.difference
+        run.review_reason = result.review_reason
+        run.technical_status = "COMPLETADO"
+        run.is_current = True
+        run.finished_at = utcnow()
+        session.add(run)
+        session.commit()
+        return True
+    except Exception as exc:  # error del propio código: se registra y el documento se puede reprocesar
+        logger.exception("Error al validar el procesamiento %s", run.id)
+        session.rollback()
+        run = session.get(ProcessingRun, run.id)
+        session.add(RunStep(run_id=run.id, step="VALIDACION", status="ERROR", attempts=0, error_message=str(exc)))
+        run.technical_status = "FALLIDO"
+        run.error_code = "VALIDACION"
+        run.error_message = f"Error inesperado al validar: {exc}"
+        run.finished_at = utcnow()
+        session.add(run)
+        session.commit()
+        return False
+
+
+def process_file(session: Session, stored: StoredFile) -> bool:
     complete = True
     for document, regions in _file_documents(session, stored):
-        complete = extract_document(session, document, regions) and complete
+        complete = process_document(session, document, regions) and complete
     return complete
+
+
+def process_single_document(engine: Engine, document_id: uuid.UUID) -> None:
+    """Reprocesa un documento en segundo plano (su procesamiento nuevo ya está creado)."""
+    with Session(engine) as session:
+        document = session.get(Document, document_id)
+        if document is None:
+            return
+        regions = session.exec(
+            select(DocumentRegion)
+            .where(DocumentRegion.document_id == document_id)
+            .order_by(col(DocumentRegion.position_in_document))
+        ).all()
+        try:
+            process_document(session, document, list(regions))
+        except QuotaExhausted:
+            pass  # el procesamiento queda FALLIDO con el motivo; el resultado actual anterior sigue vigente
 
 
 def process_submission(engine: Engine, submission_id: uuid.UUID) -> None:
@@ -407,7 +540,7 @@ def process_submission(engine: Engine, submission_id: uuid.UUID) -> None:
             for stored in files:
                 preprocess_file(session, stored)
                 if segment_file(session, submission, stored):
-                    complete = extract_file(session, stored) and complete
+                    complete = process_file(session, stored) and complete
                 else:
                     complete = False
         except QuotaExhausted:

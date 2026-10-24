@@ -27,7 +27,7 @@ def test_mixed_pdf_becomes_separate_documents(client, fake_ai):
     invoice, guide, unknown = lot["documents"]
     assert invoice["doc_type"] == "FACTURA_ELECTRONICA"
     assert [p["page_number"] for p in invoice["pages"]] == [1, 2]
-    assert invoice["technical_status"] == "EN_PROCESO"  # espera la extracción (etapa 5.3)
+    assert (invoice["technical_status"], invoice["overall_status"]) == ("COMPLETADO", "PROCESADO")
 
     assert guide["doc_type"] == "GUIA_DESPACHO"
     assert (guide["pages"][0]["page_number"], guide["pages"][0]["bbox"]) == (3, LEFT)

@@ -32,7 +32,7 @@ def test_invoice_fields_are_extracted_and_normalized(client, fake_ai):
     assert (float(run["net_amount"]), float(run["tax_amount"]), float(run["total_amount"])) == (100000, 19000, 119000)
     assert run["exempt_amount"] is None  # ausente, no 0
     assert run["rut_is_substitute"] is False
-    assert run["technical_status"] == "EN_PROCESO"  # la validación llega en la etapa 5.4
+    assert (run["technical_status"], run["overall_status"]) == ("COMPLETADO", "PROCESADO")
     assert run["extractor_model"] == "fake/extractor" and run["ocr_text"].startswith("FACTURA")
 
     fields = {f["field_name"]: f for f in detail["fields"]}
@@ -40,7 +40,7 @@ def test_invoice_fields_are_extracted_and_normalized(client, fake_ai):
     assert fields["EXEMPT_AMOUNT"]["status"] == "AUSENTE" and fields["EXEMPT_AMOUNT"]["is_required"] is False
     assert fields["TOTAL_AMOUNT"]["is_required"] is True
     assert fields["PROVIDER_RUT"]["region_id"] == detail["regions"][0]["id"]
-    assert [s["step"] for s in detail["steps"]] == ["EXTRACCION", "NORMALIZACION"]
+    assert [s["step"] for s in detail["steps"]] == ["EXTRACCION", "NORMALIZACION", "VALIDACION"]
     assert detail["issues"] == []
 
 
