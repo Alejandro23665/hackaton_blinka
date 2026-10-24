@@ -14,7 +14,7 @@ from app.ai import client
 from app.core.config import settings
 from app.models.enums import FIELD_NAMES
 
-PROMPT_VERSION = "ext-4"
+PROMPT_VERSION = "ext-5"
 # Margen alrededor de la zona del documento al recortarla (proporción de la página)
 CROP_MARGIN = 0.03
 
@@ -26,8 +26,16 @@ class FieldReading(BaseModel):
     region_index: int | None
 
 
+class SignatureReading(BaseModel):
+    present: bool
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    region_index: int | None
+    description: str | None
+
+
 class Extraction(BaseModel):
     fields: dict[Literal[FIELD_NAMES], FieldReading]  # type: ignore[valid-type]
+    signature: SignatureReading
     transcription: str
     notes: str | None
 
@@ -52,13 +60,24 @@ _FIELD_SCHEMA = {
 RESPONSE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["fields", "transcription", "notes"],
+    "required": ["fields", "signature", "transcription", "notes"],
     "properties": {
         "fields": {
             "type": "object",
             "additionalProperties": False,
             "required": list(FIELD_NAMES),
             "properties": {name: _FIELD_SCHEMA for name in FIELD_NAMES},
+        },
+        "signature": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["present", "confidence", "region_index", "description"],
+            "properties": {
+                "present": {"type": "boolean", "description": "true si hay una firma o anotación manuscrita"},
+                "confidence": {"type": ["number", "null"], "description": "Seguridad, de 0 a 1"},
+                "region_index": {"type": ["integer", "null"], "description": "Imagen donde está; null si no hay"},
+                "description": {"type": ["string", "null"], "description": "Qué se ve, en una frase; null si no hay"},
+            },
         },
         "transcription": {"type": "string", "description": "Todo el texto legible del documento, en orden de lectura"},
         "notes": {"type": ["string", "null"], "description": "Problemas de lectura, en español; null si no hay"},
@@ -97,6 +116,8 @@ al final las líneas "Neto", "Iva", "Imp Adic." y "Total". Suele estar corchetea
 documento. Nunca tomes de ella el número, el neto, el IVA, los impuestos adicionales ni el total: los \
 campos se leen solo del documento, y su texto no va en transcription. Si esa hoja tapa un dato del \
 documento, ese campo es ILEGIBLE.
+- signature: si el documento está FIRMADO. present es true si hay trazos manuscritos de recepción: una firma o rúbrica, o un nombre, RUT o fecha escritos a mano (normalmente con lápiz azul o negro, en la parte inferior, sobre o junto a un recuadro con "Nombre:", "RUT:", "Fecha:", "Recinto:" o "Firma:"). Un recuadro con esas etiquetas pero vacío, o solo texto impreso, es false. La firma puede estar en cualquier hoja: indica en region_index en cuál.
+- Lo escrito a mano en ese recuadro NO es un dato del documento: nunca uses ese RUT, nombre o fecha manuscritos para PROVIDER_RUT ni ISSUE_DATE.
 - notes: problemas de lectura en una frase, en español, o null."""
 
 _TYPE_HINTS = {

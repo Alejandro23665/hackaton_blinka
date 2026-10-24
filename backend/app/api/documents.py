@@ -104,6 +104,7 @@ def list_documents(
             total_amount=run.total_amount,
             difference=run.difference,
             review_reason=run.review_reason,
+            has_signature=run.has_signature,
             issue_count=issue_counts.get(run.id, 0),
             first_page_id=first_pages.get(document.id),
         )

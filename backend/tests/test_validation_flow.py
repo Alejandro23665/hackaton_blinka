@@ -154,3 +154,31 @@ def test_verification_can_be_disabled(client, fake_ai, monkeypatch):
     lot = _lot(client, ("f.png", image_bytes(), "image/png"))
     assert fake_ai.verification_calls == 0
     assert lot["documents"][0]["overall_status"] == "PROCESADO"
+
+
+def test_signature_is_stored_as_true_or_false(client, fake_ai):
+    fake_ai.pages = {1: INVOICE}
+    fake_ai.extractions = [extraction(signed=True), extraction(DOCUMENT_NUMBER=reading("N° 2"))]
+    lot = _lot(client, ("firmada.png", image_bytes(10, 10), "image/png"), ("sin-firma.png", image_bytes(11, 10), "image/png"))
+    signed, unsigned = lot["documents"]
+    assert (signed["has_signature"], unsigned["has_signature"]) == (True, False)
+    run = _detail(client, signed["id"])["run"]
+    assert run["has_signature"] is True and float(run["signature_confidence"]) == 0.9
+    assert client.get("/documents").json()[0]["has_signature"] in (True, False)
+
+
+def test_signature_seen_by_only_one_reading_is_not_accepted(client, fake_ai):
+    fake_ai.pages = {1: INVOICE}
+    fake_ai.extractions = [extraction(signed=True)]
+    fake_ai.verifications = [extraction(signed=False)]
+    lot = _lot(client, ("dudosa.png", image_bytes(), "image/png"))
+    detail = _detail(client, lot["documents"][0]["id"])
+    assert detail["run"]["has_signature"] is False
+    assert "FIRMA_DUDOSA" in [i["code"] for i in detail["issues"]]
+    # La firma no afecta al estado del documento
+    assert detail["run"]["overall_status"] == "PROCESADO"
+
+
+def test_unknown_documents_have_no_signature_analysis(client, fake_ai):
+    (document,) = _lot(client, ("x.png", image_bytes(), "image/png"))["documents"]
+    assert document["has_signature"] is None

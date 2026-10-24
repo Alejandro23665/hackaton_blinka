@@ -55,6 +55,15 @@ como `CONTROL_INTERNO` aunque parezcan boletas. Su número puede venir con punto
 Las guías de despacho en ticket se titulan a veces solo **"GUÍA ELECTRÓNICA"** (recuadro con R.U.T. y
 N°, timbre del SII abajo) y se clasifican como `GUIA_DESPACHO`.
 
+## Firma
+
+Cada documento admitido guarda `has_signature` (`true`/`false`) y su confianza. Cuenta como firma
+cualquier trazo manuscrito de recepción (rúbrica, o nombre, RUT o fecha escritos a mano), normalmente
+abajo, en el recuadro "Nombre / RUT / Fecha / Recinto / Firma"; un recuadro vacío es `false`. Con la
+segunda lectura, solo es `true` si ambas ven la firma; si no coinciden queda `false` con la alerta
+`FIRMA_DUDOSA`. Lo escrito a mano nunca se usa como RUT ni fecha del documento. La firma no cambia el
+estado general. En los desconocidos queda `NULL` (no se analiza).
+
 ## Estados (dimensiones separadas)
 
 | Dimensión | Valores |
@@ -74,7 +83,7 @@ ocultaría que el total no se pudo verificar.
 
 Alertas: `CAMPO_ILEGIBLE`, `CAMPO_OBLIGATORIO_AUSENTE`, `RUT_SUSTITUTO`, `DESCUADRE`,
 `VALIDACION_INCOMPLETA`, `IVA_NO_CORRESPONDE_19` (solo facturas electrónicas, ±1 peso),
-`POSIBLE_DUPLICADO` (mismo RUT real, tipo y número), `MONTO_CON_DECIMALES`, `LECTURA_INCONSISTENTE`,
+`POSIBLE_DUPLICADO` (mismo RUT real, tipo y número), `MONTO_CON_DECIMALES`, `LECTURA_INCONSISTENTE`, `FIRMA_DUDOSA`,
 `CLASIFICACION_SIN_EVIDENCIA`, `CLASIFICACION_DUDOSA`, `AGRUPACION_DUDOSA`, `BAJA_CALIDAD_IMAGEN`,
 `REGION_INVALIDA`.
 

@@ -133,6 +133,7 @@ def _documents(
                 document_number=run.document_number if run else None,
                 issue_date=run.issue_date if run else None,
                 total_amount=run.total_amount if run else None,
+                has_signature=run.has_signature if run else None,
                 pages=[
                     DocumentPageRead(
                         page_id=r.page_id,

@@ -71,6 +71,7 @@ class DocumentSummary(BaseModel):
     document_number: str | None = None
     issue_date: date | None = None
     total_amount: Decimal | None = None
+    has_signature: bool | None = None
     pages: list[DocumentPageRead]
     issues: list[IssueRead]
 
@@ -126,6 +127,8 @@ class RunRead(ReadModel):
     calculated_total: Decimal | None
     difference: Decimal | None
     total_tolerance: Decimal
+    has_signature: bool | None
+    signature_confidence: Decimal | None
     ocr_text: str | None
 
 
@@ -163,6 +166,7 @@ class DocumentListItem(BaseModel):
     total_amount: Decimal | None
     difference: Decimal | None
     review_reason: str | None
+    has_signature: bool | None
     issue_count: int
     first_page_id: uuid.UUID | None
 

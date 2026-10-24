@@ -255,7 +255,7 @@ export default function DocumentDetail({ id }) {
         <div className="space-y-6">
           {run && (
             <Card>
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <Tile>
                   <Eyebrow>Clasificación</Eyebrow>
                   <p className="mt-1 text-sm font-medium">{DOC_TYPES[run.doc_type] ?? '—'}</p>
@@ -267,6 +267,15 @@ export default function DocumentDetail({ id }) {
                 <Tile>
                   <Eyebrow>Extracción</Eyebrow>
                   <div className="mt-1.5">{run.extraction_status ? <StatusBadge status={run.extraction_status} size="sm" /> : '—'}</div>
+                </Tile>
+                <Tile>
+                  <Eyebrow>Firma</Eyebrow>
+                  <p className="mt-1 text-sm font-medium">
+                    {run.has_signature == null ? '—' : run.has_signature ? 'Firmado' : 'Sin firma'}
+                  </p>
+                  {run.signature_confidence != null && (
+                    <p className="mt-0.5 text-xs text-muted">confianza {percent(run.signature_confidence)}</p>
+                  )}
                 </Tile>
                 <Tile>
                   <Eyebrow>Validación</Eyebrow>

@@ -90,6 +90,10 @@ class ProcessingRun(SQLModel, table=True):
             "difference IS NULL OR difference = total_amount - calculated_total", name="ck_processing_runs_difference"
         ),
         CheckConstraint("total_tolerance >= 0", name="ck_processing_runs_tolerance"),
+        CheckConstraint(
+            "signature_confidence IS NULL OR signature_confidence BETWEEN 0 AND 1",
+            name="ck_processing_runs_signature_confidence",
+        ),
         *(CheckConstraint(f"{c} IS NULL OR {c} >= 0", name=f"ck_processing_runs_{c}") for c in AMOUNT_COLUMNS),
     )
 
@@ -138,6 +142,10 @@ class ProcessingRun(SQLModel, table=True):
     difference: Decimal | None = _money()
     # Tolerancia con la que se juzgó este documento
     total_tolerance: Decimal = Field(default=Decimal(0), sa_column=Column(Numeric(18, 2), nullable=False))
+
+    # Firma manuscrita de recepción. NULL = no se analizó (desconocidos o aún sin extracción)
+    has_signature: bool | None = None
+    signature_confidence: Decimal | None = Field(default=None, sa_column=Column(Numeric(4, 3), nullable=True))
 
     # Auditoría: transcripción completa del documento
     ocr_text: str | None = Field(default=None, sa_column=Column(Text, nullable=True))

@@ -10,7 +10,7 @@ import { StatusBadge, Tag } from './ui'
 export default function DocumentTable({ documents, showReceived = false }) {
   return (
     <div className="-mx-5 overflow-x-auto sm:-mx-6">
-      <table className="w-full min-w-[720px] text-left text-sm">
+      <table className="w-full min-w-[780px] text-left text-sm">
         <thead>
           <tr className="border-b border-line text-xs text-subtle">
             <th className="px-5 py-2.5 font-medium sm:pl-6">Tipo</th>
@@ -19,6 +19,7 @@ export default function DocumentTable({ documents, showReceived = false }) {
             <th className="px-3 py-2.5 font-medium">Número</th>
             <th className="px-3 py-2.5 font-medium">{showReceived ? 'Recibido' : 'Emisión'}</th>
             <th className="px-3 py-2.5 text-right font-medium">Total</th>
+            <th className="px-3 py-2.5 text-center font-medium">Firma</th>
             <th className="px-5 py-2.5 text-right font-medium sm:pr-6">Alertas</th>
           </tr>
         </thead>
@@ -53,6 +54,15 @@ export default function DocumentTable({ documents, showReceived = false }) {
                   {showReceived ? shortDate(doc.received_at) : shortDate(doc.issue_date)}
                 </td>
                 <td className="px-3 py-3 text-right tabular">{clp(doc.total_amount)}</td>
+                <td className="px-3 py-3 text-center">
+                  {doc.has_signature == null ? (
+                    <span className="text-xs text-subtle">—</span>
+                  ) : doc.has_signature ? (
+                    <Icon name="check" size={16} className="mx-auto text-success-600" />
+                  ) : (
+                    <span className="text-xs text-muted">No</span>
+                  )}
+                </td>
                 <td className="px-5 py-3 text-right sm:pr-6">
                   {issues > 0 ? (
                     <span className="inline-flex items-center gap-1 text-xs font-medium text-warning-700">

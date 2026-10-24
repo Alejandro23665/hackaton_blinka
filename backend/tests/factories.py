@@ -65,7 +65,16 @@ def reading(raw_text, status="LEIDO", confidence=0.95, region_index=1):
 ABSENT = reading(None, status="AUSENTE")
 
 
-def extraction(transcription="FACTURA ELECTRONICA ...", notes=None, **fields):
+def signature(present=False, confidence=0.9, description=None):
+    return {
+        "present": present,
+        "confidence": confidence,
+        "region_index": 1 if present else None,
+        "description": description or ("firma manuscrita en azul" if present else None),
+    }
+
+
+def extraction(transcription="FACTURA ELECTRONICA ...", notes=None, signed=False, **fields):
     """Una factura correcta (100.000 + 19.000 = 119.000); cada campo se puede sustituir por nombre."""
     base = {
         "PROVIDER_RUT": reading("76.123.456-0"),
@@ -76,4 +85,9 @@ def extraction(transcription="FACTURA ELECTRONICA ...", notes=None, **fields):
         "EXEMPT_AMOUNT": ABSENT,
         "TOTAL_AMOUNT": reading("$ 119.000"),
     }
-    return {"fields": {**base, **fields}, "transcription": transcription, "notes": notes}
+    return {
+        "fields": {**base, **fields},
+        "signature": signature(present=signed),
+        "transcription": transcription,
+        "notes": notes,
+    }

@@ -365,6 +365,26 @@ def _read(session: Session, run: ProcessingRun, step: str, images: list, tempera
     return result
 
 
+def _signature(run: ProcessingRun, first: extractor.SignatureReading, second) -> list[dict]:
+    """Fija si el documento está firmado. Con segunda lectura, solo cuenta si ambas ven la firma:
+    dar por recibido algo sin firma es peor que pedir revisarlo. Devuelve las alertas."""
+    run.has_signature = first.present
+    if first.confidence is not None:
+        run.signature_confidence = Decimal(str(round(first.confidence, 3)))
+    if second is None or second.present == first.present:
+        return []
+    run.has_signature = False
+    return [
+        {
+            "code": "FIRMA_DUDOSA",
+            "severity": "ADVERTENCIA",
+            "field_name": None,
+            "message": "Una lectura vio una firma manuscrita y la otra no; se registró sin firma. Revisa la imagen.",
+            "details": {"first": first.description, "second": second.description},
+        }
+    ]
+
+
 def _extract(session: Session, run: ProcessingRun, regions: list[DocumentRegion]) -> bool:
     """Extrae, verifica con una segunda lectura y normaliza los campos. True si salió bien.
 
@@ -376,11 +396,13 @@ def _extract(session: Session, run: ProcessingRun, regions: list[DocumentRegion]
     if result is None:
         return False
     check = None
+    second_signature = None
     if settings.EXTRACTION_VERIFY:
         second = _read(session, run, "VERIFICACION", images, temperature=settings.VERIFY_TEMPERATURE)
         if second is None:
             return False
         check = {name: reading.model_dump() for name, reading in second.parsed.fields.items()}
+        second_signature = second.parsed.signature
 
     extraction: extractor.Extraction = result.parsed
     normalized = normalize_extraction({name: reading.model_dump() for name, reading in extraction.fields.items()}, check)
@@ -399,7 +421,7 @@ def _extract(session: Session, run: ProcessingRun, regions: list[DocumentRegion]
                 invalid_reason=item.invalid_reason,
             )
         )
-    for issue in normalized.issues:
+    for issue in normalized.issues + _signature(run, extraction.signature, second_signature):
         session.add(RunIssue(run_id=run.id, **issue))
 
     values = {name: item.value for name, item in normalized.fields.items()}
