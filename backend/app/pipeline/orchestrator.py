@@ -11,6 +11,7 @@ import logging
 import uuid
 from decimal import Decimal
 
+from sqlalchemy import delete as sql_delete
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
@@ -524,6 +525,35 @@ def process_file(session: Session, stored: StoredFile) -> bool:
     for document, regions in _file_documents(session, stored):
         complete = process_document(session, document, regions) and complete
     return complete
+
+
+def reset_file(session: Session, stored: StoredFile) -> int:
+    """Prepara un archivo para volver a clasificarlo (por ejemplo, tras mejorar las instrucciones).
+
+    Las clasificaciones anteriores de sus páginas se conservan como historial (dejan de ser las
+    actuales), pero los documentos que salieron de ellas se eliminan con sus procesamientos: al
+    reclasificar, las páginas pueden agruparse en documentos distintos. Devuelve cuántos se eliminaron.
+    """
+    page_ids = [p.id for p in _file_pages(session, stored)]
+    if not page_ids:
+        return 0
+    for classification in session.exec(
+        select(PageClassification).where(
+            col(PageClassification.page_id).in_(page_ids), col(PageClassification.is_current)
+        )
+    ).all():
+        classification.is_current = False
+        session.add(classification)
+    document_ids = list(
+        session.exec(
+            select(DocumentRegion.document_id).where(col(DocumentRegion.page_id).in_(page_ids)).distinct()
+        ).all()
+    )
+    if document_ids:
+        # La base elimina en cascada regiones, procesamientos, campos, alertas y pasos
+        session.exec(sql_delete(Document).where(col(Document.id).in_(document_ids)))
+    session.commit()
+    return len(document_ids)
 
 
 def process_single_document(engine: Engine, document_id: uuid.UUID) -> None:

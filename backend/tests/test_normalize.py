@@ -95,6 +95,10 @@ def test_document_number_keeps_leading_zeros():
     assert parse_document_number("Nº 8841").value == "8841"
     assert parse_document_number("Folio: 000552").value == "000552"
     assert parse_document_number("00?123").value is None
+    # Punto de miles, como en los controles internos de OXXO
+    assert parse_document_number("N° 2.397").value == "2397"
+    assert parse_document_number("1.234.567").value == "1234567"
+    assert parse_document_number("12.34").value is None
 
 
 def test_absent_is_not_zero_and_illegible_keeps_original_text():

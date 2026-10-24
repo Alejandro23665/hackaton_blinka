@@ -87,3 +87,26 @@ def test_same_file_in_new_lot_reuses_documents_without_calling_ai(client, fake_a
     second = _lot(client, ("b.pdf", data, "application/pdf"))
     assert len(fake_ai.calls) == calls
     assert [d["id"] for d in second["documents"]] == [d["id"] for d in first["documents"]]
+
+
+def test_file_can_be_reclassified_from_scratch(client, fake_ai):
+    data = image_bytes()
+    lot = _lot(client, ("ticket.png", data, "image/png"))  # el modelo lo ve como desconocido
+    (old,) = lot["documents"]
+    assert old["doc_type"] == "DESCONOCIDO"
+
+    fake_ai.pages = {1: page_response(detected("CONTROL_INTERNO", "CONTROL INTERNO", "2.397"))}
+    file_id = lot["files"][0]["id"]
+    assert client.post(f"/submissions/{lot['id']}/files/{file_id}/reclassify").status_code == 202
+    lot = client.get(f"/submissions/{lot['id']}").json()
+    (new,) = lot["documents"]
+    assert (new["doc_type"], new["overall_status"]) == ("CONTROL_INTERNO", "PROCESADO")
+    assert new["id"] != old["id"] and client.get(f"/documents/{old['id']}").status_code == 404
+    assert len(fake_ai.calls) == 2
+
+
+def test_reclassify_rejects_files_from_other_lots(client, fake_ai):
+    first = _lot(client, ("a.png", image_bytes(10, 10), "image/png"))
+    second = _lot(client, ("b.png", image_bytes(11, 10), "image/png"))
+    other_file = first["files"][0]["id"]
+    assert client.post(f"/submissions/{second['id']}/files/{other_file}/reclassify").status_code == 404

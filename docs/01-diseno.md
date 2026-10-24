@@ -45,9 +45,13 @@ compara los valores normalizados: si no coinciden, el campo queda `ILEGIBLE` con
 `LECTURA_INCONSISTENTE`. La segunda lectura nunca "rescata" un campo ilegible. Se desactiva con
 `EXTRACTION_VERIFY=false` (a cambio, una llamada menos por documento).
 
-**Hoja adjunta tipo ticket:** la tira térmica con productos y "Neto / Iva / Imp Adic. / Total"
-que a veces viene corcheteada sobre el documento se ignora: no es un documento y nunca se toman de
-ella el número ni los montos.
+**Hoja adjunta tipo ticket:** la tira térmica **sin recuadro de RUT, tipo y N°** ("Informe
+Ingreso", lista de productos y "Neto / Iva / Imp Adic. / Total") que a veces viene corcheteada sobre
+una factura se ignora: no es un documento y nunca se toman de ella el número ni los montos.
+
+**Control interno en ticket:** los controles internos suelen ser tickets térmicos (por ejemplo de
+OXXO) **con** un recuadro "R.U.T. / CONTROL INTERNO / N°" y NETO, EXENTO, IVA y TOTAL. Se clasifican
+como `CONTROL_INTERNO` aunque parezcan boletas. Su número puede venir con punto de miles (`2.397`).
 
 ## Estados (dimensiones separadas)
 

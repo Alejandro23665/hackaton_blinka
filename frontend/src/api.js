@@ -39,6 +39,7 @@ export const api = {
       return request('/submissions', { method: 'POST', body: form })
     },
     process: (id) => request(`/submissions/${id}/process`, { method: 'POST' }),
+    reclassify: (id, fileId) => request(`/submissions/${id}/files/${fileId}/reclassify`, { method: 'POST' }),
   },
   documents: {
     list: (params) => request('/documents', { params }),

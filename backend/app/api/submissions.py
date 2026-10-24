@@ -17,7 +17,7 @@ from app.models import (
     SubmissionFile,
 )
 from app.pipeline import intake
-from app.pipeline.orchestrator import process_submission
+from app.pipeline.orchestrator import process_submission, reset_file
 from app.schemas import (
     DocumentPageRead,
     DocumentSummary,
@@ -202,5 +202,33 @@ def get_submission(submission_id: uuid.UUID, session: SessionDep):
 def reprocess_submission(submission_id: uuid.UUID, session: SessionDep, background: BackgroundTasks):
     """Vuelve a procesar un lote: retoma lo pendiente y reintenta lo que falló (lo hecho no se repite)."""
     submission = _get_or_404(session, submission_id)
+    background.add_task(process_submission, session.get_bind(), submission.id)
+    return _detail(session, submission)
+
+
+@router.post(
+    "/{submission_id}/files/{file_id}/reclassify",
+    response_model=SubmissionRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def reclassify_file(submission_id: uuid.UUID, file_id: uuid.UUID, session: SessionDep, background: BackgroundTasks):
+    """Vuelve a clasificar un archivo del lote desde cero (por ejemplo, tras mejorar las instrucciones).
+
+    Sus documentos actuales se eliminan y se crean de nuevo; las clasificaciones anteriores de sus
+    páginas quedan en el historial.
+    """
+    submission = _get_or_404(session, submission_id)
+    in_lot = session.exec(
+        select(SubmissionFile).where(SubmissionFile.submission_id == submission_id, SubmissionFile.file_id == file_id)
+    ).first()
+    stored = session.get(StoredFile, file_id)
+    if in_lot is None or stored is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "El archivo no pertenece a este lote")
+    if submission.status in ("RECIBIDO", "EN_PROCESO"):
+        raise HTTPException(status.HTTP_409_CONFLICT, "El lote se está procesando; espera a que termine")
+    reset_file(session, stored)
+    submission.status = "EN_PROCESO"
+    session.add(submission)
+    session.commit()
     background.add_task(process_submission, session.get_bind(), submission.id)
     return _detail(session, submission)

@@ -66,11 +66,14 @@ def parse_rut(raw: str) -> Parsed:
 
 
 def parse_document_number(raw: str) -> Parsed:
-    """'N° 001234' → '001234'. Conserva los ceros iniciales: son parte de su identidad."""
+    """'N° 001234' → '001234'; 'N° 2.397' → '2397'. Conserva los ceros iniciales: son parte de su identidad."""
     if _doubtful(raw):
         return Parsed(None, "tiene caracteres que no se leyeron con seguridad")
     text = re.sub(r"^\s*(N\s*[°ºO]\s*\.?|NRO\.?|NUM\.?|NUMERO|FOLIO|#)\s*:?\s*", "", raw.strip(), flags=re.IGNORECASE)
     text = re.sub(r"\s+", "", text)
+    # Algunos documentos imprimen el número con punto de miles (2.397): el punto no es parte del número
+    if re.fullmatch(r"\d{1,3}(\.\d{3})+", text):
+        text = text.replace(".", "")
     if not re.fullmatch(r"[0-9A-Za-z\-]{1,40}", text) or not re.search(r"\d", text):
         return Parsed(None, f"número de documento no reconocido: {raw!r}")
     return Parsed(text)

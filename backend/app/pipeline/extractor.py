@@ -14,7 +14,7 @@ from app.ai import client
 from app.core.config import settings
 from app.models.enums import FIELD_NAMES
 
-PROMPT_VERSION = "ext-2"
+PROMPT_VERSION = "ext-3"
 # Margen alrededor de la zona del documento al recortarla (proporción de la página)
 CROP_MARGIN = 0.03
 
@@ -104,7 +104,10 @@ _TYPE_HINTS = {
     "el monto exento solo aparece en facturas con ítems exentos.",
     "GUIA_DESPACHO": "Es una GUÍA DE DESPACHO: puede no tener montos (traslado sin valorizar). "
     "Si no hay ninguna sección de montos, marca los cuatro montos como AUSENTE.",
-    "CONTROL_INTERNO": "Es un CONTROL INTERNO de la empresa: puede tener un formato propio.",
+    "CONTROL_INTERNO": "Es un CONTROL INTERNO, a menudo un ticket térmico (por ejemplo de OXXO): el RUT y el "
+    "número están en el recuadro superior (R.U.T. y N°); la fecha suele estar como \"FECHA :\" y los montos "
+    "abajo como NETO, EXENTO, IVA 19% y TOTAL. Un EXENTO que muestra 0 es 0 (LEIDO), no ausente. No confundas "
+    "el RUT del recuadro con campos vacíos del pie (Nombre, RUT, Fecha, Firma).",
 }
 
 

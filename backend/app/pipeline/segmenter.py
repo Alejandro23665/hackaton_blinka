@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from app.ai import client
 from app.core.config import settings
 
-PROMPT_VERSION = "seg-2"
+PROMPT_VERSION = "seg-3"
 
 DocType = Literal["GUIA_DESPACHO", "CONTROL_INTERNO", "FACTURA_ELECTRONICA", "DESCONOCIDO"]
 
@@ -113,7 +113,7 @@ aparecen en ella y de qué tipo es cada uno.
 Tipos admitidos, solo si ves el título impreso en el documento:
 - FACTURA_ELECTRONICA: el título dice "FACTURA ELECTRÓNICA".
 - GUIA_DESPACHO: el título dice "GUÍA DE DESPACHO" (con o sin "ELECTRÓNICA").
-- CONTROL_INTERNO: el título dice "CONTROL INTERNO".
+- CONTROL_INTERNO: el título dice "CONTROL INTERNO". Suele ser un ticket de papel térmico angosto (por ejemplo de OXXO) con un recuadro que dice "R.U.T.", "CONTROL INTERNO" y "N°", y abajo NETO, EXENTO, IVA y TOTAL. Aunque parezca una boleta, si el recuadro dice CONTROL INTERNO es un CONTROL_INTERNO.
 - DESCONOCIDO: todo lo demás: boletas, facturas exentas o no afectas, notas de crédito o débito, \
 facturas de compra, liquidaciones, fotos, páginas en blanco, o documentos cuyo título no se ve o no se lee.
 

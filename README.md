@@ -74,6 +74,7 @@ validación de montos, alertas, pasos y reproceso).
 | GET | `/submissions` | Lotes recientes con número de archivos y páginas |
 | GET | `/submissions/{id}` | Estado del lote, sus archivos, páginas (con su clasificación) y documentos detectados |
 | POST | `/submissions/{id}/process` | Reprocesa: retoma lo pendiente y reintenta lo fallido |
+| POST | `/submissions/{id}/files/{file_id}/reclassify` | Vuelve a clasificar un archivo desde cero (sus documentos se crean de nuevo) |
 | GET | `/documents` | Bandeja: resultado vigente de cada documento (`status`, `doc_type`, `q`) |
 | GET | `/documents/stats` | Totales por estado y por tipo |
 | GET | `/documents/{id}` | Documento: datos normalizados, estado y texto original de cada campo, alertas, pasos e historial |

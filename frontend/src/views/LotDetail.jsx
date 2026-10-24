@@ -15,6 +15,7 @@ export default function LotDetail({ id }) {
   const [filter, setFilter] = useState('all')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  const [confirmFile, setConfirmFile] = useState(null)
   const running = RUNNING.has(lot.data?.status)
   usePolling(lot.reload, running)
 
@@ -41,6 +42,17 @@ export default function LotDetail({ id }) {
       setError(e.message)
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function reclassify(fileId) {
+    setConfirmFile(null)
+    setError(null)
+    try {
+      await api.submissions.reclassify(id, fileId)
+      lot.reload()
+    } catch (e) {
+      setError(e.message)
     }
   }
 
@@ -122,6 +134,25 @@ export default function LotDetail({ id }) {
                 </a>
                 <span className="text-xs text-subtle">{fileSize(file.size_bytes)}</span>
                 {file.preprocess_status !== 'LISTO' && <StatusBadge status={file.preprocess_status} size="sm" />}
+                {!running && file.pages.length > 0 && (
+                  <span className="ml-auto flex items-center gap-2">
+                    {confirmFile === file.id ? (
+                      <>
+                        <span className="text-xs text-warning-700">Se borran sus documentos y se clasifica de nuevo</span>
+                        <Button variant="ghost" size="sm" onClick={() => setConfirmFile(null)}>
+                          Cancelar
+                        </Button>
+                        <Button size="sm" icon="refresh" onClick={() => reclassify(file.id)}>
+                          Confirmar
+                        </Button>
+                      </>
+                    ) : (
+                      <Button variant="secondary" size="sm" icon="refresh" onClick={() => setConfirmFile(file.id)}>
+                        Volver a clasificar
+                      </Button>
+                    )}
+                  </span>
+                )}
               </div>
               {file.preprocess_error && <p className="mt-1 text-xs text-danger-700">{file.preprocess_error}</p>}
               {file.pages.length > 0 && (
