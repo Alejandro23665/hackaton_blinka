@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import Response
 
 from app.api.deps import SessionDep
-from app.models import Page, StoredFile
+from app.models import DocumentRegion, Page, StoredFile
 from app.storage import get_storage
 
 router = APIRouter(tags=["files"])
@@ -39,3 +39,12 @@ def get_page_image(page_id: uuid.UUID, session: SessionDep):
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Página no encontrada")
     return Response(content=_read(page.image_key), media_type="image/jpeg")
+
+
+@router.get("/regions/{region_id}/crop")
+def get_region_crop(region_id: uuid.UUID, session: SessionDep):
+    """El recorte de un documento que comparte página con otros (lo que vio el extractor)."""
+    region = session.get(DocumentRegion, region_id)
+    if region is None or region.crop_key is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Recorte no encontrado")
+    return Response(content=_read(region.crop_key), media_type="image/jpeg")

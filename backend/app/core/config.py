@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     OPENROUTER_FALLBACK_MODELS: str = ""
     # Modelo de cada agente; vacío = OPENROUTER_MODEL
     SEGMENTER_MODEL: str | None = None
+    EXTRACTOR_MODEL: str | None = None
 
     # Caché de respuestas de la IA en disco: repetir una llamada idéntica (misma imagen, mismas
     # instrucciones, mismo modelo) no gasta cuota. Se comparte entre bases de datos.

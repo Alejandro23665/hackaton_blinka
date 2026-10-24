@@ -7,7 +7,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 import app.models  # noqa: F401
 from app.core.config import settings
-from tests.factories import unknown_page
+from tests.factories import extraction, unknown_page
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
 
@@ -22,15 +22,29 @@ def storage_dir(tmp_path, monkeypatch):
 
 
 class FakeAI:
-    """Sustituye al modelo: responde por número de página y registra cada llamada. Nunca usa la red."""
+    """Sustituye al modelo y registra cada llamada. Nunca usa la red.
+
+    Segmentador: responde por número de página. Extractor: responde en orden con `extractions`
+    (o una factura correcta por defecto).
+    """
 
     def __init__(self):
         self.pages: dict[int, dict] = {}  # número de página -> respuesta del segmentador
         self.errors: dict[int, Exception] = {}  # número de página -> error a lanzar
         self.calls: list[dict] = []
+        self.extractions: list[dict | Exception] = []  # respuestas (o errores) del extractor, en orden
+        self.extraction_calls: list[dict] = []
 
     def __call__(self, *, system, content, schema, schema_name, model, parse):
         from app.ai.client import AIResult
+
+        if schema_name == "document_extraction":
+            images = sum(1 for part in content if part["type"] == "image_url")
+            self.extraction_calls.append({"prompt": content[0]["text"], "images": images})
+            data = self.extractions.pop(0) if self.extractions else extraction()
+            if isinstance(data, Exception):
+                raise data
+            return AIResult(data=data, parsed=parse(data), model="fake/extractor", attempts=1, duration_ms=7)
 
         prompt = content[0]["text"]
         number = int(re.search(r"Página (\d+) de", prompt).group(1))

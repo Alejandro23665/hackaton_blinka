@@ -12,7 +12,7 @@ trazabilidad. Diseño completo en [docs/01-diseno.md](docs/01-diseno.md).
 |---|---|---|
 | 5.1 Base | Modelos, migración, almacenamiento, preprocesador, subida de lotes | Hecha |
 | 5.2 | Segmentador-clasificador (IA) y agrupador | Hecha |
-| 5.3 | Extractor (IA) y normalizador | Pendiente |
+| 5.3 | Extractor (IA) y normalizador | Hecha |
 | 5.4 | Validador, estados y persistencia | Pendiente |
 | 5.5 | Evaluación con muestras reales | Pendiente |
 | 5.6 | Interfaz | Pendiente |
@@ -30,10 +30,11 @@ hackaton_blinka/
 │   │   ├── core/config.py    # Configuración (.env)
 │   │   ├── models/           # Tablas: lotes, archivos, páginas, documentos, procesamientos…
 │   │   ├── ai/client.py      # OpenRouter: reintentos, JSON estricto y caché de respuestas
-│   │   ├── pipeline/         # intake, preprocess, segmenter (IA), grouper, orchestrator
+│   │   ├── pipeline/         # intake, preprocess, segmenter (IA), grouper, extractor (IA),
+│   │   │                     # normalize, validate, orchestrator
 │   │   ├── storage.py        # Almacenamiento de archivos
 │   │   ├── schemas.py        # DTOs de la API
-│   │   └── api/              # submissions, files
+│   │   └── api/              # submissions, documents, files
 │   └── tests/
 └── frontend/                 # React + Vite + Tailwind (interfaz en la etapa 5.6)
 ```
@@ -60,8 +61,10 @@ uvicorn app.main:app --reload    # http://localhost:8000/docs
 | GET | `/submissions` | Lotes recientes con número de archivos y páginas |
 | GET | `/submissions/{id}` | Estado del lote, sus archivos, páginas (con su clasificación) y documentos detectados |
 | POST | `/submissions/{id}/process` | Reprocesa: retoma lo pendiente y reintenta lo fallido |
+| GET | `/documents/{id}` | Documento: datos normalizados, estado y texto original de cada campo, alertas, pasos e historial |
 | GET | `/files/{id}` | Archivo original |
 | GET | `/pages/{id}/image` | Imagen de una página (lo que ve la IA) |
+| GET | `/regions/{id}/crop` | Recorte de un documento que comparte página con otros |
 
 Un archivo repetido (mismo contenido) no se guarda dos veces: el lote lo reutiliza y lo avisa.
 

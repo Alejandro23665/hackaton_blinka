@@ -128,6 +128,11 @@ def _documents(
                 technical_status=run.technical_status if run else "EN_PROCESO",
                 overall_status=run.overall_status if run else None,
                 review_reason=run.review_reason if run else None,
+                provider_rut=run.provider_rut if run else None,
+                rut_is_substitute=run.rut_is_substitute if run else False,
+                document_number=run.document_number if run else None,
+                issue_date=run.issue_date if run else None,
+                total_amount=run.total_amount if run else None,
                 pages=[
                     DocumentPageRead(
                         page_id=r.page_id,

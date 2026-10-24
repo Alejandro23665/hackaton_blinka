@@ -52,3 +52,28 @@ def page_response(*documents, quality="ALTA", issues=None):
 
 def unknown_page():
     return page_response(detected())
+
+
+# --- Respuestas simuladas del extractor ---
+
+def reading(raw_text, status="LEIDO", confidence=0.95, region_index=1):
+    if status == "AUSENTE":
+        return {"status": "AUSENTE", "raw_text": None, "confidence": None, "region_index": None}
+    return {"status": status, "raw_text": raw_text, "confidence": confidence, "region_index": region_index}
+
+
+ABSENT = reading(None, status="AUSENTE")
+
+
+def extraction(transcription="FACTURA ELECTRONICA ...", notes=None, **fields):
+    """Una factura correcta (100.000 + 19.000 = 119.000); cada campo se puede sustituir por nombre."""
+    base = {
+        "PROVIDER_RUT": reading("76.123.456-0"),
+        "DOCUMENT_NUMBER": reading("N° 000123"),
+        "ISSUE_DATE": reading("14 de octubre de 2026"),
+        "NET_AMOUNT": reading("$ 100.000"),
+        "TAX_AMOUNT": reading("$ 19.000"),
+        "EXEMPT_AMOUNT": ABSENT,
+        "TOTAL_AMOUNT": reading("$ 119.000"),
+    }
+    return {"fields": {**base, **fields}, "transcription": transcription, "notes": notes}

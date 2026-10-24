@@ -1,8 +1,8 @@
 """Orquestador: coordina los pasos del procesamiento de un lote.
 
-Etapa actual: preprocesar cada archivo (páginas), segmentar y clasificar cada página con la IA y
-agrupar las regiones en documentos. Los documentos desconocidos quedan terminados; los admitidos
-esperan la extracción y la validación (siguientes etapas).
+Etapa actual: preprocesar cada archivo (páginas), segmentar y clasificar cada página con la IA,
+agrupar las regiones en documentos y, en los admitidos, extraer y normalizar los campos. Los
+documentos desconocidos quedan terminados; los admitidos esperan la validación (etapa 5.4).
 
 Cada paso es idempotente: volver a procesar un lote retoma lo que quedó pendiente o falló, sin
 duplicar lo que ya estaba hecho.
@@ -20,21 +20,27 @@ from app.core.config import settings
 from app.models import (
     Document,
     DocumentRegion,
+    ExtractedField,
     Page,
     PageClassification,
     ProcessingRun,
     RunIssue,
+    RunStep,
     StoredFile,
     Submission,
     SubmissionFile,
 )
 from app.models.base import utcnow
-from app.pipeline import segmenter
+from app.pipeline import extractor, segmenter
 from app.pipeline.grouper import GroupedDocument, group_pages
+from app.pipeline.normalize import normalize_extraction
 from app.pipeline.preprocess import PreprocessError, render_pages
-from app.storage import get_storage, page_key
+from app.pipeline.validate import required_fields
+from app.storage import crop_key, get_storage, page_key
 
-PIPELINE_VERSION = "0.2"
+PIPELINE_VERSION = "0.3"
+# Alertas que vienen de la segmentación y se copian si un documento se vuelve a procesar
+SEGMENTATION_ISSUES = ("CLASIFICACION_SIN_EVIDENCIA", "CLASIFICACION_DUDOSA", "AGRUPACION_DUDOSA", "BAJA_CALIDAD_IMAGEN", "REGION_INVALIDA")
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +230,167 @@ def segment_file(session: Session, submission: Submission, stored: StoredFile) -
     return True
 
 
+def _file_documents(session: Session, stored: StoredFile) -> list[tuple[Document, list[DocumentRegion]]]:
+    """Documentos que empiezan en las páginas del archivo, en orden, con sus regiones ordenadas."""
+    pages = {p.id: p for p in _file_pages(session, stored)}
+    if not pages:
+        return []
+    regions = session.exec(select(DocumentRegion).where(col(DocumentRegion.page_id).in_(list(pages)))).all()
+    by_document: dict[uuid.UUID, list[DocumentRegion]] = {}
+    for region in regions:
+        by_document.setdefault(region.document_id, []).append(region)
+
+    def order(item):
+        first = min(item[1], key=lambda r: r.position_in_document)
+        return (pages[first.page_id].page_number, first.index_on_page)
+
+    return [
+        (session.get(Document, document_id), sorted(items, key=lambda r: r.position_in_document))
+        for document_id, items in sorted(by_document.items(), key=order)
+    ]
+
+
+def _latest_run(session: Session, document: Document) -> ProcessingRun | None:
+    return session.exec(
+        select(ProcessingRun)
+        .where(ProcessingRun.document_id == document.id)
+        .order_by(col(ProcessingRun.run_number).desc())
+    ).first()
+
+
+def _has_extraction(session: Session, run: ProcessingRun) -> bool:
+    return (
+        session.exec(
+            select(RunStep.id).where(RunStep.run_id == run.id, RunStep.step == "EXTRACCION", RunStep.status == "OK")
+        ).first()
+        is not None
+    )
+
+
+def _retry_run(session: Session, failed: ProcessingRun) -> ProcessingRun:
+    """Nuevo procesamiento tras un fallo: conserva la clasificación y sus alertas."""
+    run = ProcessingRun(
+        document_id=failed.document_id,
+        run_number=failed.run_number + 1,
+        pipeline_version=PIPELINE_VERSION,
+        classifier_model=failed.classifier_model,
+        doc_type=failed.doc_type,
+        classification_confidence=failed.classification_confidence,
+        classification_evidence=failed.classification_evidence,
+        total_tolerance=Decimal(settings.TOTAL_TOLERANCE_CLP),
+    )
+    session.add(run)
+    session.flush()
+    for issue in session.exec(
+        select(RunIssue).where(RunIssue.run_id == failed.id, col(RunIssue.code).in_(SEGMENTATION_ISSUES))
+    ).all():
+        session.add(
+            RunIssue(
+                run_id=run.id, code=issue.code, severity=issue.severity, field_name=issue.field_name,
+                message=issue.message, details=issue.details,
+            )
+        )
+    session.commit()
+    return run
+
+
+def _document_images(session: Session, regions: list[DocumentRegion]) -> list[tuple[bytes, str]]:
+    """La imagen de cada región: la página completa o el recorte de su zona (que se guarda)."""
+    storage = get_storage()
+    images = []
+    for number, region in enumerate(regions, start=1):
+        page = session.get(Page, region.page_id)
+        jpeg = storage.get(page.image_key)
+        description = f"hoja {number} de {len(regions)} (página {page.page_number} del archivo)"
+        if region.bbox:
+            jpeg = extractor.crop(jpeg, region.bbox)
+            region.crop_key = crop_key(region.id)
+            storage.put(region.crop_key, jpeg)
+            session.add(region)
+            description += f", recorte de la zona {region.position_hint or 'indicada'}"
+        images.append((jpeg, description))
+    return images
+
+
+def extract_document(session: Session, document: Document, regions: list[DocumentRegion]) -> bool:
+    """Extrae y normaliza los campos de un documento admitido. True si quedó extraído."""
+    run = _latest_run(session, document)
+    if run is None or run.doc_type in (None, "DESCONOCIDO"):
+        return True
+    if run.technical_status == "FALLIDO":
+        run = _retry_run(session, run)
+    elif run.technical_status == "COMPLETADO" or _has_extraction(session, run):
+        return True
+
+    try:
+        result = extractor.extract_document(run.doc_type, _document_images(session, regions))
+    except AIError as exc:
+        session.add(RunStep(run_id=run.id, step="EXTRACCION", status="ERROR", attempts=0, model=extractor.model_name(), error_message=str(exc)))
+        run.technical_status = "FALLIDO"
+        run.error_code = exc.code
+        run.error_message = str(exc)
+        run.finished_at = utcnow()
+        session.add(run)
+        session.commit()
+        if exc.code in ("CUOTA", "SIN_CLAVE", "CLAVE"):
+            raise QuotaExhausted(str(exc)) from exc
+        return False
+
+    session.add(
+        RunStep(
+            run_id=run.id, step="EXTRACCION", status="OK", attempts=result.attempts, model=result.model,
+            duration_ms=result.duration_ms, cost_usd=result.cost_usd, output=result.data,
+        )
+    )
+    extraction: extractor.Extraction = result.parsed
+    normalized = normalize_extraction({name: reading.model_dump() for name, reading in extraction.fields.items()})
+    required = required_fields(run.doc_type, {name: f.status for name, f in normalized.fields.items()})
+    for name, item in normalized.fields.items():
+        index = item.region_index
+        session.add(
+            ExtractedField(
+                run_id=run.id,
+                field_name=name,
+                status=item.status,
+                is_required=name in required,
+                raw_text=item.raw_text,
+                confidence=Decimal(str(round(item.confidence, 3))) if item.confidence is not None else None,
+                region_id=regions[index - 1].id if index and 1 <= index <= len(regions) else None,
+                invalid_reason=item.invalid_reason,
+            )
+        )
+    for issue in normalized.issues:
+        session.add(RunIssue(run_id=run.id, **issue))
+
+    values = {name: item.value for name, item in normalized.fields.items()}
+    run.extractor_model = result.model
+    run.provider_rut = normalized.provider_rut
+    run.rut_is_substitute = normalized.rut_is_substitute
+    run.document_number = values["DOCUMENT_NUMBER"]
+    run.issue_date = values["ISSUE_DATE"]
+    run.net_amount = values["NET_AMOUNT"]
+    run.tax_amount = values["TAX_AMOUNT"]
+    run.exempt_amount = values["EXEMPT_AMOUNT"]
+    run.total_amount = values["TOTAL_AMOUNT"]
+    run.ocr_text = extraction.transcription
+    session.add(run)
+    session.add(
+        RunStep(
+            run_id=run.id, step="NORMALIZACION", status="OK", attempts=0,
+            output={name: {"status": f.status, "reason": f.invalid_reason} for name, f in normalized.fields.items()},
+        )
+    )
+    session.commit()
+    return True
+
+
+def extract_file(session: Session, stored: StoredFile) -> bool:
+    complete = True
+    for document, regions in _file_documents(session, stored):
+        complete = extract_document(session, document, regions) and complete
+    return complete
+
+
 def process_submission(engine: Engine, submission_id: uuid.UUID) -> None:
     """Procesa un lote en segundo plano, con su propia sesión de base de datos."""
     with Session(engine) as session:
@@ -239,7 +406,10 @@ def process_submission(engine: Engine, submission_id: uuid.UUID) -> None:
         try:
             for stored in files:
                 preprocess_file(session, stored)
-                complete = segment_file(session, submission, stored) and complete
+                if segment_file(session, submission, stored):
+                    complete = extract_file(session, stored) and complete
+                else:
+                    complete = False
         except QuotaExhausted:
             complete = False
         except Exception:

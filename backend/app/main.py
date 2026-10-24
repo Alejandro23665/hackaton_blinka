@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
-from app.api import files, submissions
+from app.api import documents, files, submissions
 from app.core.config import settings
 
 app = FastAPI(title="Procesamiento de documentos", version="0.2.0")
@@ -58,6 +58,7 @@ async def require_password(request: Request, call_next):
 
 
 app.include_router(submissions.router)
+app.include_router(documents.router)
 app.include_router(files.router)
 
 

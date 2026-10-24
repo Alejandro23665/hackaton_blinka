@@ -55,3 +55,8 @@ def original_key(sha256: str, extension: str) -> str:
 
 def page_key(sha256: str, page_number: int) -> str:
     return f"pages/{sha256[:2]}/{sha256}/{page_number:04d}.jpg"
+
+
+def crop_key(region_id) -> str:
+    """Recorte de la zona de un documento dentro de su página."""
+    return f"crops/{region_id}.jpg"

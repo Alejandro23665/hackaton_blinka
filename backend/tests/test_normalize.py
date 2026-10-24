@@ -1,0 +1,151 @@
+"""Normalizador: del texto leído por la IA a valores exactos. Sin base de datos ni IA."""
+from datetime import date
+from decimal import Decimal
+
+import pytest
+
+from app.core.config import settings
+from app.pipeline.normalize import (
+    normalize_extraction,
+    parse_amount,
+    parse_date,
+    parse_document_number,
+    parse_rut,
+    rut_check_digit,
+)
+from app.pipeline.validate import required_fields
+from tests.factories import ABSENT, extraction, reading
+
+TODAY = date(2026, 10, 24)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("76.123.456-0", "76123456-0"),
+        ("R.U.T.: 76.123.456-0", "76123456-0"),
+        ("76123456-0", "76123456-0"),
+        ("12.345.678-5", "12345678-5"),
+        ("8.765.401-k", "8765401-K"),  # dígito verificador K, en minúscula
+    ],
+)
+def test_valid_ruts(raw, expected):
+    assert parse_rut(raw).value == expected
+
+
+@pytest.mark.parametrize("raw", ["76.123.456-K", "76.12?.456-0", "RUT", "123456789012-3", "0-0"])
+def test_invalid_ruts(raw):
+    parsed = parse_rut(raw)
+    assert parsed.value is None and parsed.reason
+
+
+def test_check_digit_examples():
+    # Casos con dígito 0 y K, los más propensos a errores
+    assert rut_check_digit(76123456) == "0"
+    assert rut_check_digit(1) == "9"
+    assert any(rut_check_digit(n) == "K" for n in range(1, 50))
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("14/10/2026", date(2026, 10, 14)),
+        ("14-10-26", date(2026, 10, 14)),
+        ("05.03.2026", date(2026, 3, 5)),
+        ("14 de octubre de 2026", date(2026, 10, 14)),
+        ("14-OCT-2026", date(2026, 10, 14)),
+        ("3 sept. 2026", date(2026, 9, 3)),
+        ("2026-10-14", date(2026, 10, 14)),
+        ("Fecha de emisión: 05/03/2026", date(2026, 3, 5)),
+    ],
+)
+def test_dates_are_day_month_year(raw, expected):
+    assert parse_date(raw, today=TODAY).value == expected
+
+
+@pytest.mark.parametrize("raw", ["31/02/2026", "0?/03/2026", "marzo", "05/03/2030", "14/10/1990", "2026/14/10"])
+def test_invalid_dates(raw):
+    assert parse_date(raw, today=TODAY).value is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("$ 1.190.000", Decimal(1190000)),
+        ("1.190.000", Decimal(1190000)),
+        ("1190000", Decimal(1190000)),
+        ("$119.000", Decimal(119000)),
+        ("1,190,000", Decimal(1190000)),
+        ("119.000,50", Decimal("119000.50")),
+        ("0", Decimal(0)),
+        ("CLP 5.000", Decimal(5000)),
+    ],
+)
+def test_amounts_in_chilean_pesos(raw, expected):
+    assert parse_amount(raw).value == expected
+
+
+@pytest.mark.parametrize("raw", ["12.34", "1?0.000", "-5.000", "cien mil", "1.19.000"])
+def test_invalid_amounts(raw):
+    assert parse_amount(raw).value is None
+
+
+def test_document_number_keeps_leading_zeros():
+    assert parse_document_number("N° 001234").value == "001234"
+    assert parse_document_number("Nº 8841").value == "8841"
+    assert parse_document_number("Folio: 000552").value == "000552"
+    assert parse_document_number("00?123").value is None
+
+
+def test_absent_is_not_zero_and_illegible_keeps_original_text():
+    result = normalize_extraction(
+        extraction(
+            EXEMPT_AMOUNT=ABSENT,
+            ISSUE_DATE=reading("0?/03/2026", status="ILEGIBLE", confidence=0.3),
+        )["fields"]
+    )
+    exempt, issue_date = result.fields["EXEMPT_AMOUNT"], result.fields["ISSUE_DATE"]
+    assert (exempt.status, exempt.value) == ("AUSENTE", None)
+    assert (issue_date.status, issue_date.value, issue_date.raw_text) == ("ILEGIBLE", None, "0?/03/2026")
+    assert [i["code"] for i in result.issues] == ["CAMPO_ILEGIBLE"]
+
+
+def test_low_confidence_or_unparseable_reading_becomes_illegible():
+    result = normalize_extraction(
+        extraction(
+            NET_AMOUNT=reading("$ 100.000", confidence=settings.FIELD_MIN_CONFIDENCE - 0.05),
+            TOTAL_AMOUNT=reading("ciento diecinueve mil"),
+        )["fields"]
+    )
+    assert result.fields["NET_AMOUNT"].status == "ILEGIBLE" and "confianza" in result.fields["NET_AMOUNT"].invalid_reason
+    assert result.fields["TOTAL_AMOUNT"].status == "ILEGIBLE"
+    assert result.fields["TOTAL_AMOUNT"].raw_text == "ciento diecinueve mil"
+
+
+@pytest.mark.parametrize(
+    "rut",
+    [reading("76.123.456-K"), reading("76.1??.456-0", status="ILEGIBLE", confidence=0.2), ABSENT],
+)
+def test_unrecoverable_rut_is_stored_as_substitute(rut):
+    result = normalize_extraction(extraction(PROVIDER_RUT=rut)["fields"])
+    assert (result.provider_rut, result.rut_is_substitute) == ("1-9", True)
+    assert result.issues[0]["code"] == "RUT_SUSTITUTO"
+
+
+def test_real_rut_is_not_substitute():
+    result = normalize_extraction(extraction()["fields"])
+    assert (result.provider_rut, result.rut_is_substitute, result.issues) == ("76123456-0", False, [])
+
+
+def test_decimal_amount_is_flagged():
+    result = normalize_extraction(extraction(TAX_AMOUNT=reading("19.000,40"))["fields"])
+    assert result.fields["TAX_AMOUNT"].value == Decimal("19000.40")
+    assert [i["code"] for i in result.issues] == ["MONTO_CON_DECIMALES"]
+
+
+def test_required_fields_depend_on_document_type():
+    valued = {"NET_AMOUNT": "LEIDO", "TAX_AMOUNT": "AUSENTE", "EXEMPT_AMOUNT": "AUSENTE", "TOTAL_AMOUNT": "LEIDO"}
+    unvalued = dict.fromkeys(valued, "AUSENTE")
+    assert "NET_AMOUNT" in required_fields("FACTURA_ELECTRONICA", unvalued)
+    assert "NET_AMOUNT" in required_fields("GUIA_DESPACHO", valued)
+    assert required_fields("GUIA_DESPACHO", unvalued) == {"PROVIDER_RUT", "DOCUMENT_NUMBER", "ISSUE_DATE"}
