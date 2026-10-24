@@ -26,6 +26,8 @@ async function request(path, { method = 'GET', body, params } = {}) {
   return data
 }
 
+const fileUrl = (path) => new URL(path, BASE_URL).toString()
+
 export const api = {
   health: () => request('/health'),
   submissions: {
@@ -36,7 +38,15 @@ export const api = {
       files.forEach((file) => form.append('files', file))
       return request('/submissions', { method: 'POST', body: form })
     },
+    process: (id) => request(`/submissions/${id}/process`, { method: 'POST' }),
   },
-  fileUrl: (id) => new URL(`/files/${id}`, BASE_URL).toString(),
-  pageImageUrl: (id) => new URL(`/pages/${id}/image`, BASE_URL).toString(),
+  documents: {
+    list: (params) => request('/documents', { params }),
+    stats: () => request('/documents/stats'),
+    get: (id) => request(`/documents/${id}`),
+    reprocess: (id) => request(`/documents/${id}/reprocess`, { method: 'POST' }),
+  },
+  fileUrl: (id) => fileUrl(`/files/${id}`),
+  pageImageUrl: (id) => fileUrl(`/pages/${id}/image`),
+  cropUrl: (id) => fileUrl(`/regions/${id}/crop`),
 }

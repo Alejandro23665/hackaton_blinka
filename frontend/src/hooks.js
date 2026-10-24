@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
-/** Carga datos con `loader` y vuelve a cargar cuando cambia `reloadKey` o se llama a reload(). */
+/** Carga datos con `loader` y vuelve a cargar cuando cambia `reloadKey` o se llama a reload().
+ * Al recargar conserva los datos anteriores (sin parpadeo): `loading` sin `data` es la primera carga. */
 export function useLoad(loader, reloadKey) {
   const [state, setState] = useState({ data: null, error: null, loading: true })
   const [tick, setTick] = useState(0)
@@ -10,7 +11,7 @@ export function useLoad(loader, reloadKey) {
     setState((s) => ({ ...s, loading: true }))
     loader()
       .then((data) => !cancelled && setState({ data, error: null, loading: false }))
-      .catch((error) => !cancelled && setState({ data: null, error: error.message, loading: false }))
+      .catch((error) => !cancelled && setState((s) => ({ data: s.data, error: error.message, loading: false })))
     return () => {
       cancelled = true
     }
@@ -19,4 +20,36 @@ export function useLoad(loader, reloadKey) {
 
   const reload = useCallback(() => setTick((t) => t + 1), [])
   return { ...state, reload }
+}
+
+/** Llama a reload() cada `ms` mientras `active` sea verdadero (por ejemplo, un lote en proceso). */
+export function usePolling(reload, active, ms = 3000) {
+  useEffect(() => {
+    if (!active) return
+    const timer = setInterval(reload, ms)
+    return () => clearInterval(timer)
+  }, [reload, active, ms])
+}
+
+/** Ruta a partir del hash: #/lotes/<id> → { section: 'lotes', id }. Permite enlaces directos. */
+function parseHash() {
+  const [section = 'lotes', id = null] = window.location.hash.replace(/^#\/?/, '').split('/').filter(Boolean)
+  return { section, id }
+}
+
+export function useRoute() {
+  const [route, setRoute] = useState(parseHash)
+  useEffect(() => {
+    const onChange = () => {
+      setRoute(parseHash())
+      window.scrollTo(0, 0)
+    }
+    window.addEventListener('hashchange', onChange)
+    return () => window.removeEventListener('hashchange', onChange)
+  }, [])
+  return route
+}
+
+export function href(section, id) {
+  return id ? `#/${section}/${id}` : `#/${section}`
 }

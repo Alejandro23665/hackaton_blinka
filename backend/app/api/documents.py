@@ -1,6 +1,9 @@
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+from sqlalchemy import func, or_
+from sqlalchemy.dialects.postgresql import distinct_on
+from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
 from app.api.deps import SessionDep
@@ -9,6 +12,8 @@ from app.models.enums import FIELD_NAMES
 from app.pipeline.orchestrator import new_run_from, process_single_document
 from app.schemas import (
     DocumentDetail,
+    DocumentListItem,
+    DocumentStats,
     FieldRead,
     IssueRead,
     RegionRead,
@@ -24,6 +29,101 @@ def shown_run(runs: list[ProcessingRun]) -> ProcessingRun | None:
     """El procesamiento que se muestra: el actual; si aún no hay, el más reciente (en curso o fallido)."""
     current = [r for r in runs if r.is_current]
     return current[0] if current else (max(runs, key=lambda r: r.run_number) if runs else None)
+
+
+def _shown_runs():
+    """Subconsulta: el procesamiento que se muestra de cada documento (el actual o el más reciente)."""
+    return (
+        select(ProcessingRun)
+        .ext(distinct_on(col(ProcessingRun.document_id)))
+        .order_by(
+            col(ProcessingRun.document_id), col(ProcessingRun.is_current).desc(), col(ProcessingRun.run_number).desc()
+        )
+        .subquery()
+    )
+
+
+def _status(run) -> str:
+    return run.overall_status or run.technical_status
+
+
+@router.get("", response_model=list[DocumentListItem])
+def list_documents(
+    session: SessionDep,
+    status_filter: str | None = Query(
+        default=None,
+        alias="status",
+        description="PROCESADO, NO_LEGIBLE, DESCUADRE, DESCONOCIDO, EN_PROCESO o FALLIDO",
+    ),
+    doc_type: str | None = None,
+    q: str | None = Query(default=None, description="Busca por RUT o número de documento"),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """Bandeja de documentos, del más reciente al más antiguo, con su resultado vigente."""
+    runs = aliased(ProcessingRun, _shown_runs())
+    query = select(Document, runs).join(runs, col(runs.document_id) == Document.id)
+    if status_filter in ("EN_PROCESO", "FALLIDO"):
+        query = query.where(col(runs.overall_status).is_(None), runs.technical_status == status_filter)
+    elif status_filter:
+        query = query.where(runs.overall_status == status_filter)
+    if doc_type:
+        query = query.where(runs.doc_type == doc_type)
+    if q and q.strip():
+        pattern = f"%{q.strip().replace('.', '')}%"
+        query = query.where(or_(col(runs.provider_rut).ilike(pattern), col(runs.document_number).ilike(pattern)))
+    rows = session.exec(query.order_by(col(Document.received_at).desc(), col(Document.created_at)).limit(limit)).all()
+
+    document_ids = [d.id for d, _ in rows]
+    issue_counts: dict[uuid.UUID, int] = {}
+    first_pages: dict[uuid.UUID, uuid.UUID] = {}
+    if rows:
+        run_ids = [r.id for _, r in rows]
+        for run_id, count in session.exec(
+            select(RunIssue.run_id, func.count()).where(col(RunIssue.run_id).in_(run_ids)).group_by(col(RunIssue.run_id))
+        ).all():
+            issue_counts[run_id] = count
+        for region in session.exec(
+            select(DocumentRegion).where(
+                col(DocumentRegion.document_id).in_(document_ids), DocumentRegion.position_in_document == 1
+            )
+        ).all():
+            first_pages[region.document_id] = region.page_id
+
+    return [
+        DocumentListItem(
+            id=document.id,
+            submission_id=document.submission_id,
+            received_at=document.received_at,
+            doc_type=run.doc_type,
+            technical_status=run.technical_status,
+            overall_status=run.overall_status,
+            provider_rut=run.provider_rut,
+            rut_is_substitute=run.rut_is_substitute,
+            document_number=run.document_number,
+            issue_date=run.issue_date,
+            total_amount=run.total_amount,
+            difference=run.difference,
+            review_reason=run.review_reason,
+            issue_count=issue_counts.get(run.id, 0),
+            first_page_id=first_pages.get(document.id),
+        )
+        for document, run in rows
+    ]
+
+
+@router.get("/stats", response_model=DocumentStats)
+def document_stats(session: SessionDep):
+    """Cuántos documentos hay por estado y por tipo (según su resultado vigente)."""
+    runs = aliased(ProcessingRun, _shown_runs())
+    by_status: dict[str, int] = {}
+    by_type: dict[str, int] = {}
+    total = 0
+    for run in session.exec(select(runs)).all():
+        total += 1
+        by_status[_status(run)] = by_status.get(_status(run), 0) + 1
+        if run.doc_type:
+            by_type[run.doc_type] = by_type.get(run.doc_type, 0) + 1
+    return DocumentStats(total=total, by_status=by_status, by_type=by_type)
 
 
 def _get_or_404(session: Session, document_id: uuid.UUID) -> Document:

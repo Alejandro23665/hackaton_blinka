@@ -15,7 +15,7 @@ trazabilidad. Diseño completo en [docs/01-diseno.md](docs/01-diseno.md).
 | 5.3 | Extractor (IA) y normalizador | Hecha |
 | 5.4 | Validador, estados y persistencia | Hecha |
 | 5.5 | Evaluación con muestras reales | Pendiente |
-| 5.6 | Interfaz | Pendiente |
+| 5.6 | Interfaz | Hecha |
 | 5.7 | Despliegue | Pendiente |
 
 ## Estructura
@@ -36,7 +36,7 @@ hackaton_blinka/
 │   │   ├── schemas.py        # DTOs de la API
 │   │   └── api/              # submissions, documents, files
 │   └── tests/
-└── frontend/                 # React + Vite + Tailwind (interfaz en la etapa 5.6)
+└── frontend/                 # React + Vite + Tailwind: lotes, bandeja de documentos y detalle
 ```
 
 ## Puesta en marcha
@@ -53,6 +53,19 @@ alembic upgrade head
 uvicorn app.main:app --reload    # http://localhost:8000/docs
 ```
 
+En otra terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev                      # http://localhost:5173
+```
+
+**Interfaz:** *Lotes* (subir imágenes o PDF y ver el progreso de los agentes), *Documentos*
+(bandeja con totales por estado, filtros por estado y tipo y búsqueda por RUT o número) y el
+detalle de cada documento (imagen con la zona marcada, estados, campos con su texto original,
+validación de montos, alertas, pasos y reproceso).
+
 ## API
 
 | Método | Ruta | Qué hace |
@@ -61,6 +74,8 @@ uvicorn app.main:app --reload    # http://localhost:8000/docs
 | GET | `/submissions` | Lotes recientes con número de archivos y páginas |
 | GET | `/submissions/{id}` | Estado del lote, sus archivos, páginas (con su clasificación) y documentos detectados |
 | POST | `/submissions/{id}/process` | Reprocesa: retoma lo pendiente y reintenta lo fallido |
+| GET | `/documents` | Bandeja: resultado vigente de cada documento (`status`, `doc_type`, `q`) |
+| GET | `/documents/stats` | Totales por estado y por tipo |
 | GET | `/documents/{id}` | Documento: datos normalizados, estado y texto original de cada campo, alertas, pasos e historial |
 | POST | `/documents/{id}/reprocess` | Vuelve a extraer y validar; el resultado actual sigue vigente hasta que el nuevo termine bien |
 | GET | `/files/{id}` | Archivo original |

@@ -149,6 +149,31 @@ class RunSummary(ReadModel):
     finished_at: datetime | None
 
 
+class DocumentListItem(BaseModel):
+    id: uuid.UUID
+    submission_id: uuid.UUID
+    received_at: datetime
+    doc_type: str | None
+    technical_status: str
+    overall_status: str | None
+    provider_rut: str | None
+    rut_is_substitute: bool
+    document_number: str | None
+    issue_date: date | None
+    total_amount: Decimal | None
+    difference: Decimal | None
+    review_reason: str | None
+    issue_count: int
+    first_page_id: uuid.UUID | None
+
+
+class DocumentStats(BaseModel):
+    total: int
+    # Por estado general (o técnico si aún no termina: EN_PROCESO, FALLIDO)
+    by_status: dict[str, int]
+    by_type: dict[str, int]
+
+
 class DocumentDetail(BaseModel):
     """Un documento con su procesamiento más reciente y todo lo necesario para auditarlo."""
 

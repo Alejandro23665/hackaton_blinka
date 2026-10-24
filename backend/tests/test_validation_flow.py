@@ -103,3 +103,24 @@ def test_reprocess_rules(client, fake_ai):
     (unknown,) = _lot(client, ("x.png", image_bytes(), "image/png"))["documents"]
     assert client.post(f"/documents/{unknown['id']}/reprocess").status_code == 409
     assert client.post("/documents/00000000-0000-0000-0000-000000000000/reprocess").status_code == 404
+
+
+def test_document_inbox_lists_current_results_with_filters(client, fake_ai):
+    fake_ai.pages = {1: INVOICE}
+    fake_ai.extractions = [extraction(), extraction(DOCUMENT_NUMBER=reading("N° 999"), TOTAL_AMOUNT=reading("$ 120.000"))]
+    _lot(client, ("a.png", image_bytes(10, 10), "image/png"), ("b.png", image_bytes(11, 10), "image/png"))
+    fake_ai.pages = {}
+    _lot(client, ("c.png", image_bytes(12, 10), "image/png"))  # desconocido
+
+    items = client.get("/documents").json()
+    assert len(items) == 3 and all(i["first_page_id"] for i in items)
+    mismatch = client.get("/documents", params={"status": "DESCUADRE"}).json()
+    assert [(i["document_number"], i["issue_count"]) for i in mismatch] == [("999", 1)]
+    assert len(client.get("/documents", params={"q": "76.123.456"}).json()) == 2  # RUT con o sin puntos
+    assert [i["document_number"] for i in client.get("/documents", params={"q": "999"}).json()] == ["999"]
+    assert len(client.get("/documents", params={"doc_type": "DESCONOCIDO"}).json()) == 1
+
+    stats = client.get("/documents/stats").json()
+    assert stats["total"] == 3
+    assert stats["by_status"] == {"PROCESADO": 1, "DESCUADRE": 1, "DESCONOCIDO": 1}
+    assert stats["by_type"] == {"FACTURA_ELECTRONICA": 2, "DESCONOCIDO": 1}
