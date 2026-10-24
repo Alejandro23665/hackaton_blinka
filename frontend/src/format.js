@@ -66,6 +66,7 @@ export const FIELD_LABELS = {
 
 export const STEP_LABELS = {
   EXTRACCION: 'Extracción (IA)',
+  VERIFICACION: 'Verificación (2.ª lectura IA)',
   NORMALIZACION: 'Normalización',
   VALIDACION: 'Validación',
 }

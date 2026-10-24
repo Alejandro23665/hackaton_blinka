@@ -40,7 +40,7 @@ def test_invoice_fields_are_extracted_and_normalized(client, fake_ai):
     assert fields["EXEMPT_AMOUNT"]["status"] == "AUSENTE" and fields["EXEMPT_AMOUNT"]["is_required"] is False
     assert fields["TOTAL_AMOUNT"]["is_required"] is True
     assert fields["PROVIDER_RUT"]["region_id"] == detail["regions"][0]["id"]
-    assert [s["step"] for s in detail["steps"]] == ["EXTRACCION", "NORMALIZACION", "VALIDACION"]
+    assert [s["step"] for s in detail["steps"]] == ["EXTRACCION", "VERIFICACION", "NORMALIZACION", "VALIDACION"]
     assert detail["issues"] == []
 
 

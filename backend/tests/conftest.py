@@ -25,7 +25,8 @@ class FakeAI:
     """Sustituye al modelo y registra cada llamada. Nunca usa la red.
 
     Segmentador: responde por número de página. Extractor: responde en orden con `extractions`
-    (o una factura correcta por defecto).
+    (o una factura correcta por defecto). Segunda lectura (verificación): responde en orden con
+    `verifications` o, si no hay, repite la última lectura principal (las dos coinciden).
     """
 
     def __init__(self):
@@ -34,9 +35,19 @@ class FakeAI:
         self.calls: list[dict] = []
         self.extractions: list[dict | Exception] = []  # respuestas (o errores) del extractor, en orden
         self.extraction_calls: list[dict] = []
+        self.verifications: list[dict | Exception] = []
+        self.verification_calls = 0
+        self._last_extraction: dict | None = None
 
-    def __call__(self, *, system, content, schema, schema_name, model, parse):
+    def __call__(self, *, system, content, schema, schema_name, model, parse, temperature=0):
         from app.ai.client import AIResult
+
+        if schema_name == "document_extraction" and temperature > 0:
+            self.verification_calls += 1
+            data = self.verifications.pop(0) if self.verifications else self._last_extraction
+            if isinstance(data, Exception):
+                raise data
+            return AIResult(data=data, parsed=parse(data), model="fake/extractor", attempts=1, duration_ms=6)
 
         if schema_name == "document_extraction":
             images = sum(1 for part in content if part["type"] == "image_url")
@@ -44,6 +55,7 @@ class FakeAI:
             data = self.extractions.pop(0) if self.extractions else extraction()
             if isinstance(data, Exception):
                 raise data
+            self._last_extraction = data
             return AIResult(data=data, parsed=parse(data), model="fake/extractor", attempts=1, duration_ms=7)
 
         prompt = content[0]["text"]

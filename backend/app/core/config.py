@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     # Modelo de cada agente; vacío = OPENROUTER_MODEL
     SEGMENTER_MODEL: str | None = None
     EXTRACTOR_MODEL: str | None = None
+    # Segunda lectura independiente de cada documento: los campos en que no coincide quedan ILEGIBLE.
+    # Detecta datos "adivinados" (la confianza que declara el modelo no lo hace). Duplica las llamadas.
+    EXTRACTION_VERIFY: bool = True
+    VERIFY_TEMPERATURE: float = 0.8
 
     # Caché de respuestas de la IA en disco: repetir una llamada idéntica (misma imagen, mismas
     # instrucciones, mismo modelo) no gasta cuota. Se comparte entre bases de datos.

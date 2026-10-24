@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from app.ai import client
 from app.core.config import settings
 
-PROMPT_VERSION = "seg-1"
+PROMPT_VERSION = "seg-2"
 
 DocType = Literal["GUIA_DESPACHO", "CONTROL_INTERNO", "FACTURA_ELECTRONICA", "DESCONOCIDO"]
 
@@ -123,6 +123,12 @@ Nunca inventes ni completes la evidencia.
 - Si dudas del tipo, usa DESCONOCIDO: es preferible a equivocarse.
 - Una página puede tener varios documentos (por ejemplo, dos facturas fotografiadas juntas): devuelve \
 uno por documento, numerados de izquierda a derecha y de arriba abajo.
+- Hoja adjunta que se IGNORA: una tira de papel angosta tipo ticket (impresa en impresora térmica), \
+con un número arriba, una lista de productos con código, descripción y cantidad, y al final las líneas \
+"Neto", "Iva", "Imp Adic." y "Total". Suele estar corcheteada o superpuesta sobre el documento real. \
+No es un documento del lote: no la devuelvas como documento ni uses su número o su título. Si tapa parte \
+de un documento, informa solo ese documento, con su zona completa. Solo si en la página no hay nada más \
+que esa hoja, devuelve un único elemento DESCONOCIDO de página completa.
 - Si la página no tiene ningún documento, devuelve un único elemento DESCONOCIDO de página completa.
 - continuation_of_previous: true solo si el documento continúa el último documento de la página \
 anterior (por ejemplo, la segunda hoja de la misma factura: sin título nuevo, el mismo número, o \

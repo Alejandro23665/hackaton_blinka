@@ -207,16 +207,61 @@ def normalize_field(name: str, status: str, raw_text: str | None, confidence: fl
     return item
 
 
-def normalize_extraction(fields: dict[str, dict]) -> Normalized:
-    """`fields`: por campo, {status, raw_text, confidence, region_index} como los devuelve el extractor."""
+def _from_reading(name: str, fields: dict[str, dict]) -> NormalizedField:
+    given = fields.get(name) or {"status": "AUSENTE"}
+    return normalize_field(
+        name, given.get("status", "AUSENTE"), given.get("raw_text"), given.get("confidence"), given.get("region_index")
+    )
+
+
+def reconcile(item: NormalizedField, second: NormalizedField) -> str | None:
+    """Compara la lectura principal con una segunda lectura independiente del mismo documento.
+
+    Un dato realmente legible se lee igual dos veces; uno que la IA "adivina" suele cambiar entre
+    lecturas (por ejemplo, una fecha borrosa leída como 10-10-2025 y luego 18-10-2026). Si no
+    coinciden, el campo pasa a ILEGIBLE. Nunca rescata un campo: si la principal no lo leyó, sigue igual.
+    Devuelve el motivo si hubo desacuerdo (y modifica `item`).
+    """
+    reason = None
+    if item.status == "LEIDO":
+        if second.status != "LEIDO":
+            reason = f"la segunda lectura no lo pudo leer ({second.raw_text or 'sin texto'})"
+        elif second.value != item.value:
+            reason = f"dos lecturas no coinciden ({item.raw_text!r} y {second.raw_text!r})"
+    elif item.status == "AUSENTE" and second.status == "LEIDO":
+        reason = f"una lectura no lo encontró y otra leyó {second.raw_text!r}"
+    if reason:
+        item.status, item.value, item.invalid_reason = "ILEGIBLE", None, reason
+        if item.confidence is not None and second.confidence is not None:
+            item.confidence = min(item.confidence, second.confidence)
+    return reason
+
+
+def normalize_extraction(fields: dict[str, dict], check: dict[str, dict] | None = None) -> Normalized:
+    """`fields`: por campo, {status, raw_text, confidence, region_index} como los devuelve el extractor.
+
+    `check`: una segunda lectura independiente (misma forma). Si se da, los campos en los que las
+    dos lecturas no coinciden quedan ILEGIBLE con la alerta LECTURA_INCONSISTENTE.
+    """
     result: dict[str, NormalizedField] = {}
     issues: list[dict] = []
     for name in PARSERS:
-        given = fields.get(name) or {"status": "AUSENTE"}
-        item = normalize_field(
-            name, given.get("status", "AUSENTE"), given.get("raw_text"), given.get("confidence"), given.get("region_index")
-        )
+        item = _from_reading(name, fields)
         result[name] = item
+        if check is not None:
+            second = _from_reading(name, check)
+            reason = reconcile(item, second)
+            if reason:
+                issues.append(
+                    {
+                        "code": "LECTURA_INCONSISTENTE",
+                        "severity": "ADVERTENCIA",
+                        "field_name": name,
+                        "message": f"{FIELD_LABELS[name]} no fiable: {reason}.",
+                        "details": {"first": item.raw_text, "second": second.raw_text},
+                    }
+                )
+                continue
         if item.status == "ILEGIBLE" and name != "PROVIDER_RUT":
             issues.append(
                 {

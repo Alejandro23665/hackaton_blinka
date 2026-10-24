@@ -149,3 +149,48 @@ def test_required_fields_depend_on_document_type():
     assert "NET_AMOUNT" in required_fields("FACTURA_ELECTRONICA", unvalued)
     assert "NET_AMOUNT" in required_fields("GUIA_DESPACHO", valued)
     assert required_fields("GUIA_DESPACHO", unvalued) == {"PROVIDER_RUT", "DOCUMENT_NUMBER", "ISSUE_DATE"}
+
+
+# --- Segunda lectura (verificación) -----------------------------------------------------------
+
+
+def test_matching_second_reading_keeps_the_fields():
+    first = extraction()["fields"]
+    # Mismo dato escrito de otra forma: lo que se compara es el valor normalizado
+    second = extraction(ISSUE_DATE=reading("14/10/2026"), DOCUMENT_NUMBER=reading("000123"))["fields"]
+    result = normalize_extraction(first, second)
+    assert all(f.status != "ILEGIBLE" for f in result.fields.values()) and result.issues == []
+
+
+def test_guessed_date_that_changes_between_readings_becomes_illegible():
+    # Caso real: fecha diminuta y borrosa leída como 10.10.2025 con 90 % de "confianza"
+    first = extraction(ISSUE_DATE=reading("10.10.2025", confidence=0.9))["fields"]
+    second = extraction(ISSUE_DATE=reading("18-10-2026", confidence=0.8))["fields"]
+    result = normalize_extraction(first, second)
+    date_field = result.fields["ISSUE_DATE"]
+    assert (date_field.status, date_field.value, date_field.raw_text) == ("ILEGIBLE", None, "10.10.2025")
+    assert "no coinciden" in date_field.invalid_reason
+    assert [i["code"] for i in result.issues] == ["LECTURA_INCONSISTENTE"]
+    assert result.issues[0]["details"] == {"first": "10.10.2025", "second": "18-10-2026"}
+
+
+def test_second_reading_that_cannot_read_or_find_the_field_is_a_disagreement():
+    unreadable = normalize_extraction(
+        extraction()["fields"], extraction(TOTAL_AMOUNT=reading("1?9.000", status="ILEGIBLE", confidence=0.3))["fields"]
+    )
+    assert unreadable.fields["TOTAL_AMOUNT"].status == "ILEGIBLE"
+    found_once = normalize_extraction(extraction()["fields"], extraction(EXEMPT_AMOUNT=reading("$ 5.000"))["fields"])
+    assert found_once.fields["EXEMPT_AMOUNT"].status == "ILEGIBLE"
+    assert "no lo encontró" in found_once.fields["EXEMPT_AMOUNT"].invalid_reason
+
+
+def test_second_reading_never_rescues_a_field():
+    first = extraction(ISSUE_DATE=reading("0?/10/2026", status="ILEGIBLE", confidence=0.3))["fields"]
+    result = normalize_extraction(first, extraction()["fields"])
+    assert result.fields["ISSUE_DATE"].status == "ILEGIBLE"
+
+
+def test_inconsistent_rut_becomes_substitute():
+    result = normalize_extraction(extraction()["fields"], extraction(PROVIDER_RUT=reading("76.123.465-K"))["fields"])
+    assert (result.provider_rut, result.rut_is_substitute) == ("1-9", True)
+    assert sorted(i["code"] for i in result.issues) == ["LECTURA_INCONSISTENTE", "RUT_SUSTITUTO"]

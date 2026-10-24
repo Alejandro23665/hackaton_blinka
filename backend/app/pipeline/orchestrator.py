@@ -335,14 +335,14 @@ def process_document(session: Session, document: Document, regions: list[Documen
     return _validate_run(session, run)
 
 
-def _extract(session: Session, run: ProcessingRun, regions: list[DocumentRegion]) -> bool:
-    """Extrae y normaliza los campos (paso EXTRACCION y NORMALIZACION). True si salió bien."""
+def _read(session: Session, run: ProcessingRun, step: str, images: list, temperature: float):
+    """Una lectura del extractor, registrada como paso. None si falló (el procesamiento queda FALLIDO)."""
     try:
-        result = extractor.extract_document(run.doc_type, _document_images(session, regions))
+        result = extractor.extract_document(run.doc_type, images, temperature=temperature)
     except AIError as exc:
         session.add(
             RunStep(
-                run_id=run.id, step="EXTRACCION", status="ERROR", attempts=0,
+                run_id=run.id, step=step, status="ERROR", attempts=0,
                 model=extractor.model_name(), error_message=str(exc),
             )
         )
@@ -354,16 +354,35 @@ def _extract(session: Session, run: ProcessingRun, regions: list[DocumentRegion]
         session.commit()
         if exc.code in ("CUOTA", "SIN_CLAVE", "CLAVE"):
             raise QuotaExhausted(str(exc)) from exc
-        return False
-
+        return None
     session.add(
         RunStep(
-            run_id=run.id, step="EXTRACCION", status="OK", attempts=result.attempts, model=result.model,
+            run_id=run.id, step=step, status="OK", attempts=result.attempts, model=result.model,
             duration_ms=result.duration_ms, cost_usd=result.cost_usd, output=result.data,
         )
     )
+    return result
+
+
+def _extract(session: Session, run: ProcessingRun, regions: list[DocumentRegion]) -> bool:
+    """Extrae, verifica con una segunda lectura y normaliza los campos. True si salió bien.
+
+    Si la segunda lectura falla, el procesamiento queda FALLIDO y se puede reintentar: sin
+    verificación no se aceptan los datos.
+    """
+    images = _document_images(session, regions)
+    result = _read(session, run, "EXTRACCION", images, temperature=0)
+    if result is None:
+        return False
+    check = None
+    if settings.EXTRACTION_VERIFY:
+        second = _read(session, run, "VERIFICACION", images, temperature=settings.VERIFY_TEMPERATURE)
+        if second is None:
+            return False
+        check = {name: reading.model_dump() for name, reading in second.parsed.fields.items()}
+
     extraction: extractor.Extraction = result.parsed
-    normalized = normalize_extraction({name: reading.model_dump() for name, reading in extraction.fields.items()})
+    normalized = normalize_extraction({name: reading.model_dump() for name, reading in extraction.fields.items()}, check)
     required = required_fields(run.doc_type, {name: f.status for name, f in normalized.fields.items()})
     for name, item in normalized.fields.items():
         index = item.region_index

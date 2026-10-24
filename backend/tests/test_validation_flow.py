@@ -124,3 +124,33 @@ def test_document_inbox_lists_current_results_with_filters(client, fake_ai):
     assert stats["total"] == 3
     assert stats["by_status"] == {"PROCESADO": 1, "DESCUADRE": 1, "DESCONOCIDO": 1}
     assert stats["by_type"] == {"FACTURA_ELECTRONICA": 2, "DESCONOCIDO": 1}
+
+
+def test_second_reading_disagreement_makes_the_document_not_legible(client, fake_ai):
+    fake_ai.pages = {1: INVOICE}
+    fake_ai.extractions = [extraction(ISSUE_DATE=reading("10.10.2025", confidence=0.9))]
+    fake_ai.verifications = [extraction(ISSUE_DATE=reading("18-10-2026", confidence=0.8))]
+    lot = _lot(client, ("borrosa.png", image_bytes(), "image/png"))
+    detail = _detail(client, lot["documents"][0]["id"])
+    assert detail["run"]["overall_status"] == "NO_LEGIBLE" and detail["run"]["issue_date"] is None
+    assert [s["step"] for s in detail["steps"]][:2] == ["EXTRACCION", "VERIFICACION"]
+    assert "LECTURA_INCONSISTENTE" in [i["code"] for i in detail["issues"]]
+
+
+def test_failed_second_reading_does_not_accept_the_data(client, fake_ai):
+    fake_ai.pages = {1: INVOICE}
+    fake_ai.verifications = [AIError("OpenRouter respondió 502", "PROVEEDOR")]
+    lot = _lot(client, ("f.png", image_bytes(), "image/png"))
+    detail = _detail(client, lot["documents"][0]["id"])
+    assert detail["run"]["technical_status"] == "FALLIDO"
+    assert [(s["step"], s["status"]) for s in detail["steps"]] == [("EXTRACCION", "OK"), ("VERIFICACION", "ERROR")]
+
+
+def test_verification_can_be_disabled(client, fake_ai, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "EXTRACTION_VERIFY", False)
+    fake_ai.pages = {1: INVOICE}
+    lot = _lot(client, ("f.png", image_bytes(), "image/png"))
+    assert fake_ai.verification_calls == 0
+    assert lot["documents"][0]["overall_status"] == "PROCESADO"

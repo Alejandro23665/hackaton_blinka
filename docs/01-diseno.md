@@ -17,6 +17,7 @@ Lote ─► Recepción (originales + sha256) ─► Preprocesador ─► página
      ─► [IA] Segmentador-clasificador (por página) ─► regiones con tipo y evidencia
      ─► Agrupador (código) ─► documentos
      ─► [IA] Extractor (por documento admitido) ─► texto leído por campo + estado + confianza
+     ─► [IA] Segunda lectura independiente ─► los campos que no coinciden quedan ILEGIBLE
      ─► Normalizador (código) ─► Validador (código) ─► estados y alertas ─► una transacción
 ```
 
@@ -33,6 +34,20 @@ Lote ─► Recepción (originales + sha256) ─► Preprocesador ─► página
 - **RUT ilegible** (o con dígito verificador incorrecto): se guarda `1-9` con `rut_is_substitute`.
 - **Suma:** neto + impuestos + exento = total, con tolerancia `TOTAL_TOLERANCE_CLP` (0). Un
   opcional ausente no suma; uno ilegible deja la validación `INCOMPLETA` (nunca `DESCUADRE`).
+
+## Lecturas no fiables: doble lectura
+
+La confianza que declara el modelo no es fiable: con una fecha diminuta y borrosa respondió
+`10.10.2025` con 90 % de seguridad. Pero un dato que el modelo *adivina* cambia entre lecturas
+(`10.10.2025`, `18-10-2026`, `18-10-2016`…), mientras que uno nítido se lee siempre igual. Por eso
+cada documento se lee **dos veces** (la segunda con temperatura `VERIFY_TEMPERATURE`) y el código
+compara los valores normalizados: si no coinciden, el campo queda `ILEGIBLE` con la alerta
+`LECTURA_INCONSISTENTE`. La segunda lectura nunca "rescata" un campo ilegible. Se desactiva con
+`EXTRACTION_VERIFY=false` (a cambio, una llamada menos por documento).
+
+**Hoja adjunta tipo ticket:** la tira térmica con productos y "Neto / Iva / Imp Adic. / Total"
+que a veces viene corcheteada sobre el documento se ignora: no es un documento y nunca se toman de
+ella el número ni los montos.
 
 ## Estados (dimensiones separadas)
 
@@ -53,7 +68,7 @@ ocultaría que el total no se pudo verificar.
 
 Alertas: `CAMPO_ILEGIBLE`, `CAMPO_OBLIGATORIO_AUSENTE`, `RUT_SUSTITUTO`, `DESCUADRE`,
 `VALIDACION_INCOMPLETA`, `IVA_NO_CORRESPONDE_19` (solo facturas electrónicas, ±1 peso),
-`POSIBLE_DUPLICADO` (mismo RUT real, tipo y número), `MONTO_CON_DECIMALES`,
+`POSIBLE_DUPLICADO` (mismo RUT real, tipo y número), `MONTO_CON_DECIMALES`, `LECTURA_INCONSISTENTE`,
 `CLASIFICACION_SIN_EVIDENCIA`, `CLASIFICACION_DUDOSA`, `AGRUPACION_DUDOSA`, `BAJA_CALIDAD_IMAGEN`,
 `REGION_INVALIDA`.
 

@@ -14,7 +14,7 @@ from app.ai import client
 from app.core.config import settings
 from app.models.enums import FIELD_NAMES
 
-PROMPT_VERSION = "ext-1"
+PROMPT_VERSION = "ext-2"
 # Margen alrededor de la zona del documento al recortarla (proporción de la página)
 CROP_MARGIN = 0.03
 
@@ -91,6 +91,12 @@ Reglas:
 si falta el IVA, no lo calcules desde el neto. Lee solo lo que está escrito.
 - Un monto que no aparece es AUSENTE, no 0. Usa 0 solo si el documento muestra 0 escrito.
 - transcription: todo el texto legible del documento, en orden de lectura.
+- Ignora por completo la hoja adjunta tipo ticket si aparece: una tira de papel angosta (impresa en \
+impresora térmica), con un número arriba, una lista de productos con código, descripción y cantidad, y \
+al final las líneas "Neto", "Iva", "Imp Adic." y "Total". Suele estar corcheteada o superpuesta sobre el \
+documento. Nunca tomes de ella el número, el neto, el IVA, los impuestos adicionales ni el total: los \
+campos se leen solo del documento, y su texto no va en transcription. Si esa hoja tapa un dato del \
+documento, ese campo es ILEGIBLE.
 - notes: problemas de lectura en una frase, en español, o null."""
 
 _TYPE_HINTS = {
@@ -120,8 +126,12 @@ def crop(jpeg: bytes, bbox: dict) -> bytes:
         return buffer.getvalue()
 
 
-def extract_document(doc_type: str, images: list[tuple[bytes, str]]) -> client.AIResult:
-    """`images`: por cada región del documento, en orden, la imagen y una descripción ("hoja 1 de 2…")."""
+def extract_document(doc_type: str, images: list[tuple[bytes, str]], temperature: float = 0) -> client.AIResult:
+    """`images`: por cada región del documento, en orden, la imagen y una descripción ("hoja 1 de 2…").
+
+    `temperature` > 0 se usa en la segunda lectura (verificación): lo que se lee con nitidez sale igual;
+    lo que el modelo adivina tiende a variar.
+    """
     content = [
         client.text_part(
             f"{_TYPE_HINTS[doc_type]} El documento tiene {len(images)} imagen(es)."
@@ -137,4 +147,5 @@ def extract_document(doc_type: str, images: list[tuple[bytes, str]]) -> client.A
         schema_name="document_extraction",
         model=model_name(),
         parse=Extraction.model_validate,
+        temperature=temperature,
     )

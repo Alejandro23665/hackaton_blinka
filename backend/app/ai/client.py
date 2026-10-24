@@ -146,6 +146,7 @@ def call_json(
     schema_name: str,
     model: str,
     parse: Callable[[dict], Any],
+    temperature: float = 0,
 ) -> AIResult:
     """Llama al modelo y devuelve su JSON ya validado por `parse`.
 
@@ -157,7 +158,7 @@ def call_json(
 
     payload = {
         "model": model,
-        "temperature": 0,
+        "temperature": temperature,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
         "response_format": {
             "type": "json_schema",
