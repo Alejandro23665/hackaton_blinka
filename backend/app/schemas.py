@@ -121,8 +121,8 @@ class RunRead(ReadModel):
     document_number: str | None
     issue_date: date | None
     net_amount: Decimal | None
-    tax_amount: Decimal | None
     vat_amount: Decimal | None
+    other_taxes_amount: Decimal | None
     exempt_amount: Decimal | None
     total_amount: Decimal | None
     calculated_total: Decimal | None

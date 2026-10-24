@@ -81,7 +81,7 @@ def tax_line(raw_text, label="IVA 19%", status="LEIDO", confidence=0.95, region_
 def extraction(transcription="FACTURA ELECTRONICA ...", notes=None, signed=False, tax_lines=None, **fields):
     """Una factura correcta (100.000 + 19.000 = 119.000); cada campo se puede sustituir por nombre.
 
-    Los impuestos van en `tax_lines`, como los devuelve el extractor. Por comodidad, TAX_AMOUNT=reading(...)
+    Los impuestos van en `tax_lines`, como los devuelve el extractor. Por comodidad, VAT_AMOUNT=reading(...)
     equivale a una sola línea de IVA (o a ninguna, si es AUSENTE).
     """
     base = {
@@ -92,7 +92,7 @@ def extraction(transcription="FACTURA ELECTRONICA ...", notes=None, signed=False
         "EXEMPT_AMOUNT": ABSENT,
         "TOTAL_AMOUNT": reading("$ 119.000"),
     }
-    tax = fields.pop("TAX_AMOUNT", reading("$ 19.000"))
+    tax = fields.pop("VAT_AMOUNT", reading("$ 19.000"))
     if tax_lines is None:
         tax_lines = [] if tax["status"] == "AUSENTE" else [tax_line(tax["raw_text"], status=tax["status"], confidence=tax["confidence"])]
     return {
@@ -106,4 +106,7 @@ def extraction(transcription="FACTURA ELECTRONICA ...", notes=None, signed=False
 
 def readings(data):
     """Lecturas por campo como las arma el orquestador (los impuestos como líneas)."""
-    return {**data["fields"], "TAX_AMOUNT": {"lines": data["tax_lines"]}}
+    from app.pipeline.normalize import split_tax_lines
+
+    vat, others = split_tax_lines(data["tax_lines"])
+    return {**data["fields"], "VAT_AMOUNT": {"lines": vat}, "OTHER_TAXES_AMOUNT": {"lines": others}}

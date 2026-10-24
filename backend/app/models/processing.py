@@ -28,7 +28,7 @@ from app.models.enums import (
     one_of,
 )
 
-AMOUNT_COLUMNS = ("net_amount", "tax_amount", "vat_amount", "exempt_amount", "total_amount")
+AMOUNT_COLUMNS = ("net_amount", "vat_amount", "other_taxes_amount", "exempt_amount", "total_amount")
 DATA_COLUMNS = ("provider_rut", "document_number", "issue_date", *AMOUNT_COLUMNS, "calculated_total", "difference")
 
 
@@ -133,9 +133,10 @@ class ProcessingRun(SQLModel, table=True):
     document_number: str | None = Field(default=None, max_length=40)
     issue_date: date | None = None
     net_amount: Decimal | None = _money()
-    tax_amount: Decimal | None = _money()
-    # IVA por separado, cuando hay una línea de IVA legible (tax_amount suma todos los impuestos)
+    # IVA (obligatorio)
     vat_amount: Decimal | None = _money()
+    # Suma de los demás impuestos (IABA, ILA…), opcionales
+    other_taxes_amount: Decimal | None = _money()
     exempt_amount: Decimal | None = _money()
     total_amount: Decimal | None = _money()
 

@@ -1,7 +1,7 @@
 """Validador (código puro, sin IA ni base de datos): reglas de negocio sobre los datos normalizados.
 
 - Campos obligatorios según el tipo de documento.
-- Suma: neto + impuestos + exento = total, con la tolerancia configurada.
+- Suma: neto + IVA + otros impuestos + exento = total, con la tolerancia configurada.
 - Alertas que no cambian el estado (IVA distinto del 19 %).
 - Estado general derivado: DESCONOCIDO → NO_LEGIBLE → DESCUADRE → PROCESADO.
 
@@ -10,8 +10,10 @@ La aritmética usa Decimal: exacta, sin errores de redondeo de los float.
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 
-REQUIRED_FIELDS = ("PROVIDER_RUT", "DOCUMENT_NUMBER", "ISSUE_DATE", "NET_AMOUNT", "TOTAL_AMOUNT")
-AMOUNT_FIELDS = ("NET_AMOUNT", "TAX_AMOUNT", "EXEMPT_AMOUNT", "TOTAL_AMOUNT")
+# El IVA es obligatorio; los demás impuestos (IABA, ILA…) y el exento son opcionales
+REQUIRED_FIELDS = ("PROVIDER_RUT", "DOCUMENT_NUMBER", "ISSUE_DATE", "NET_AMOUNT", "VAT_AMOUNT", "TOTAL_AMOUNT")
+AMOUNT_FIELDS = ("NET_AMOUNT", "VAT_AMOUNT", "OTHER_TAXES_AMOUNT", "EXEMPT_AMOUNT", "TOTAL_AMOUNT")
+OPTIONAL_AMOUNTS = ("OTHER_TAXES_AMOUNT", "EXEMPT_AMOUNT")
 VAT_RATE = Decimal("0.19")
 # Diferencia admitida entre el IVA leído y el 19 % del neto (redondeo del documento)
 VAT_TOLERANCE = Decimal(1)
@@ -21,7 +23,8 @@ LABELS = {
     "DOCUMENT_NUMBER": "número del documento",
     "ISSUE_DATE": "fecha de emisión",
     "NET_AMOUNT": "monto neto",
-    "TAX_AMOUNT": "impuestos",
+    "VAT_AMOUNT": "IVA",
+    "OTHER_TAXES_AMOUNT": "otros impuestos",
     "EXEMPT_AMOUNT": "monto exento",
     "TOTAL_AMOUNT": "monto total",
 }
@@ -63,12 +66,8 @@ def validate(
     statuses: dict[str, str],
     values: dict[str, object],
     tolerance: Decimal,
-    vat: Decimal | None = None,
 ) -> Validation:
-    """`statuses` y `values`: estado y valor normalizado de cada campo (None si no hay valor).
-
-    `vat`: el IVA por separado, si se conoce. Si no, la comprobación del 19 % usa el total de impuestos.
-    """
+    """`statuses` y `values`: estado y valor normalizado de cada campo (None si no hay valor)."""
     issues: list[dict] = []
     reasons: list[str] = []
 
@@ -91,13 +90,13 @@ def validate(
         reasons.append("No se pudo recuperar: " + ", ".join(LABELS[name] for name in missing))
 
     # 2. Suma de montos
-    net, tax, exempt, total = (values[name] for name in AMOUNT_FIELDS)
+    net, vat, other_taxes, exempt, total = (values[name] for name in AMOUNT_FIELDS)
     calculated = difference = None
     if is_unvalued_guide(doc_type, statuses):
         validation_status = "NO_APLICA"
     else:
-        unknown = [name for name in ("NET_AMOUNT", "TOTAL_AMOUNT") if values[name] is None]
-        unknown += [name for name in ("TAX_AMOUNT", "EXEMPT_AMOUNT") if statuses[name] == "ILEGIBLE"]
+        unknown = [name for name in ("NET_AMOUNT", "VAT_AMOUNT", "TOTAL_AMOUNT") if values[name] is None]
+        unknown += [name for name in OPTIONAL_AMOUNTS if statuses[name] == "ILEGIBLE"]
         if unknown:
             validation_status = "INCOMPLETA"
             message = "No se pudo comprobar la suma: falta " + ", ".join(LABELS[name] for name in unknown)
@@ -113,12 +112,13 @@ def validate(
             )
         else:
             # Un opcional ausente no suma (no es lo mismo que 0, pero no aporta al total)
-            calculated = net + (tax or Decimal(0)) + (exempt or Decimal(0))
+            calculated = net + vat + (other_taxes or Decimal(0)) + (exempt or Decimal(0))
             difference = total - calculated
             if abs(difference) > tolerance:
                 validation_status = "DESCUADRE"
                 parts = [f"neto {clp(net)}"]
-                parts += [f"impuestos {clp(tax)}"] if tax is not None else []
+                parts += [f"IVA {clp(vat)}"]
+                parts += [f"otros impuestos {clp(other_taxes)}"] if other_taxes is not None else []
                 parts += [f"exento {clp(exempt)}"] if exempt is not None else []
                 message = (
                     f"Descuadre: {' + '.join(parts)} = {clp(calculated)}, pero el total declarado es "
@@ -138,19 +138,16 @@ def validate(
                 validation_status = "CUADRA"
 
     # 3. Alertas que no cambian el estado
-    vat_read = vat if vat is not None else tax
-    if doc_type == "FACTURA_ELECTRONICA" and net is not None and vat_read is not None:
+    if doc_type == "FACTURA_ELECTRONICA" and net is not None and vat is not None:
         expected = (net * VAT_RATE).quantize(Decimal(1), rounding=ROUND_HALF_UP)
-        if abs(vat_read - expected) > VAT_TOLERANCE:
-            label = "El IVA" if vat is not None else "Los impuestos"
+        if abs(vat - expected) > VAT_TOLERANCE:
             issues.append(
                 {
                     "code": "IVA_NO_CORRESPONDE_19",
                     "severity": "ADVERTENCIA",
-                    "field_name": "TAX_AMOUNT",
-                    "message": f"{label} ({clp(vat_read)}) no es el 19 % del neto ({clp(expected)}): "
-                    "puede haber otros impuestos o una lectura errónea.",
-                    "details": {"expected_vat": str(expected), "vat": str(vat_read)},
+                    "field_name": "VAT_AMOUNT",
+                    "message": f"El IVA ({clp(vat)}) no es el 19 % del neto ({clp(expected)}): posible lectura errónea.",
+                    "details": {"expected_vat": str(expected), "vat": str(vat)},
                 }
             )
 

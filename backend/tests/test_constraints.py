@@ -52,7 +52,7 @@ def test_valid_run_is_accepted(session, document):
             is_current=True,
             provider_rut="76123456-K",
             net_amount=Decimal(100000),
-            tax_amount=Decimal(19000),
+            vat_amount=Decimal(19000),
             total_amount=Decimal(119000),
             calculated_total=Decimal(119000),
             difference=Decimal(0),
@@ -123,5 +123,5 @@ def test_read_field_keeps_original_text(session, document):
     session.commit()
     assert _rejected(session, ExtractedField(run_id=run.id, field_name="ISSUE_DATE", status="LEIDO", is_required=True))
     assert not _rejected(
-        session, ExtractedField(run_id=run.id, field_name="TAX_AMOUNT", status="AUSENTE", is_required=False)
+        session, ExtractedField(run_id=run.id, field_name="OTHER_TAXES_AMOUNT", status="AUSENTE", is_required=False)
     )

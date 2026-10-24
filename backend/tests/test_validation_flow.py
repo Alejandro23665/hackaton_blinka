@@ -24,7 +24,7 @@ def test_spec_cases_end_to_end(client, fake_ai):
             PROVIDER_RUT=reading("76.1??.456-0", status="ILEGIBLE", confidence=0.3),
             ISSUE_DATE=reading("0?/10/2026", status="ILEGIBLE", confidence=0.3),
         ),
-        extraction(TAX_AMOUNT=reading(None, status="AUSENTE"), TOTAL_AMOUNT=reading("$ 100.000")),
+        extraction(DOCUMENT_NUMBER=reading("N° 4"), notes="sin exento ni otros impuestos"),
     ]
     files = [(f"{n}.png", image_bytes(10 + n, 10), "image/png") for n in range(4)]
     lot = _lot(client, *files)
@@ -198,5 +198,6 @@ def test_hidden_additional_tax_makes_the_document_not_legible(client, fake_ai):
     ]
     lot = _lot(client, ("faltante.png", image_bytes(), "image/png"))
     run = _detail(client, lot["documents"][0]["id"])["run"]
-    assert (run["overall_status"], run["validation_status"], run["tax_amount"]) == ("NO_LEGIBLE", "INCOMPLETA", None)
+    assert (run["overall_status"], run["validation_status"], run["other_taxes_amount"]) == ("NO_LEGIBLE", "INCOMPLETA", None)
+    assert float(run["vat_amount"]) == 431  # el IVA sí se leyó
     assert run["document_number"] == "1352386"

@@ -34,7 +34,7 @@ from app.models import (
 from app.models.base import utcnow
 from app.pipeline import extractor, segmenter
 from app.pipeline.grouper import GroupedDocument, group_pages
-from app.pipeline.normalize import normalize_extraction
+from app.pipeline.normalize import normalize_extraction, split_tax_lines
 from app.pipeline.preprocess import PreprocessError, render_pages
 from app.pipeline.validate import required_fields, validate
 from app.storage import crop_key, get_storage, page_key
@@ -366,9 +366,12 @@ def _read(session: Session, run: ProcessingRun, step: str, images: list, tempera
 
 
 def _readings(extraction: extractor.Extraction) -> dict[str, dict]:
-    """Lecturas por campo para el normalizador; los impuestos van como líneas para que el código los sume."""
+    """Lecturas por campo para el normalizador. Los impuestos van como líneas: el código separa el IVA
+    de los demás (IABA, ILA…) y los suma."""
     readings = {name: reading.model_dump() for name, reading in extraction.fields.items()}
-    readings["TAX_AMOUNT"] = {"lines": [line.model_dump() for line in extraction.tax_lines]}
+    vat_lines, other_lines = split_tax_lines([line.model_dump() for line in extraction.tax_lines])
+    readings["VAT_AMOUNT"] = {"lines": vat_lines}
+    readings["OTHER_TAXES_AMOUNT"] = {"lines": other_lines}
     return readings
 
 
@@ -438,8 +441,8 @@ def _extract(session: Session, run: ProcessingRun, regions: list[DocumentRegion]
     run.document_number = values["DOCUMENT_NUMBER"]
     run.issue_date = values["ISSUE_DATE"]
     run.net_amount = values["NET_AMOUNT"]
-    run.tax_amount = values["TAX_AMOUNT"]
-    run.vat_amount = normalized.vat_amount
+    run.vat_amount = values["VAT_AMOUNT"]
+    run.other_taxes_amount = values["OTHER_TAXES_AMOUNT"]
     run.exempt_amount = values["EXEMPT_AMOUNT"]
     run.total_amount = values["TOTAL_AMOUNT"]
     run.ocr_text = extraction.transcription
@@ -483,11 +486,12 @@ def _validate_run(session: Session, run: ProcessingRun) -> bool:
             "DOCUMENT_NUMBER": run.document_number,
             "ISSUE_DATE": run.issue_date,
             "NET_AMOUNT": run.net_amount,
-            "TAX_AMOUNT": run.tax_amount,
+            "VAT_AMOUNT": run.vat_amount,
+            "OTHER_TAXES_AMOUNT": run.other_taxes_amount,
             "EXEMPT_AMOUNT": run.exempt_amount,
             "TOTAL_AMOUNT": run.total_amount,
         }
-        result = validate(run.doc_type, statuses, values, run.total_tolerance, vat=run.vat_amount)
+        result = validate(run.doc_type, statuses, values, run.total_tolerance)
         issues = list(result.issues)
         duplicates = _possible_duplicates(session, run)
         if duplicates:

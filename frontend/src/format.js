@@ -59,7 +59,8 @@ export const FIELD_LABELS = {
   DOCUMENT_NUMBER: 'Número',
   ISSUE_DATE: 'Fecha de emisión',
   NET_AMOUNT: 'Monto neto',
-  TAX_AMOUNT: 'Impuestos',
+  VAT_AMOUNT: 'IVA',
+  OTHER_TAXES_AMOUNT: 'Otros impuestos',
   EXEMPT_AMOUNT: 'Monto exento',
   TOTAL_AMOUNT: 'Monto total',
 }

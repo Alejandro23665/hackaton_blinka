@@ -147,13 +147,19 @@ def test_real_rut_is_not_substitute():
 
 
 def test_decimal_amount_is_flagged():
-    result = normalize_extraction(fields(TAX_AMOUNT=reading("19.000,40")))
-    assert result.fields["TAX_AMOUNT"].value == Decimal("19000.40")
+    result = normalize_extraction(fields(VAT_AMOUNT=reading("19.000,40")))
+    assert result.fields["VAT_AMOUNT"].value == Decimal("19000.40")
     assert [i["code"] for i in result.issues] == ["MONTO_CON_DECIMALES"]
 
 
 def test_required_fields_depend_on_document_type():
-    valued = {"NET_AMOUNT": "LEIDO", "TAX_AMOUNT": "AUSENTE", "EXEMPT_AMOUNT": "AUSENTE", "TOTAL_AMOUNT": "LEIDO"}
+    valued = {
+        "NET_AMOUNT": "LEIDO",
+        "VAT_AMOUNT": "LEIDO",
+        "OTHER_TAXES_AMOUNT": "AUSENTE",
+        "EXEMPT_AMOUNT": "AUSENTE",
+        "TOTAL_AMOUNT": "LEIDO",
+    }
     unvalued = dict.fromkeys(valued, "AUSENTE")
     assert "NET_AMOUNT" in required_fields("FACTURA_ELECTRONICA", unvalued)
     assert "NET_AMOUNT" in required_fields("GUIA_DESPACHO", valued)
@@ -205,26 +211,29 @@ def test_inconsistent_rut_becomes_substitute():
     assert sorted(i["code"] for i in result.issues) == ["LECTURA_INCONSISTENTE", "RUT_SUSTITUTO"]
 
 
-# --- Impuestos: suma de líneas ----------------------------------------------------------------
+# --- Impuestos: IVA aparte y otros impuestos sumados -----------------------------------------
 
 
-def test_taxes_are_the_sum_of_all_tax_lines_and_vat_is_kept_apart():
-    result = normalize_extraction(fields(tax_lines=[tax_line("$ 431"), tax_line("$ 227", label="ILL(10,0%)")]))
-    tax = result.fields["TAX_AMOUNT"]
-    assert (tax.status, tax.value, tax.raw_text) == ("LEIDO", Decimal(658), "IVA 19%: $ 431 + ILL(10,0%): $ 227")
-    assert result.vat_amount == Decimal(431)
+def test_vat_and_other_taxes_are_separate_fields():
+    result = normalize_extraction(
+        fields(tax_lines=[tax_line("$ 431"), tax_line("$ 227", label="ILA VIN 20.5%"), tax_line("$ 100", label="IABA 10%")])
+    )
+    vat, other = result.fields["VAT_AMOUNT"], result.fields["OTHER_TAXES_AMOUNT"]
+    assert (vat.status, vat.value, vat.raw_text) == ("LEIDO", Decimal(431), "IVA 19%: $ 431")
+    assert (other.status, other.value) == ("LEIDO", Decimal(327))
+    assert other.raw_text == "ILA VIN 20.5%: $ 227 + IABA 10%: $ 100"
 
 
-def test_one_unreadable_tax_line_makes_taxes_illegible():
-    # Caso real: el ILL tapado por una perforación; sumar solo el IVA daría un monto falso
+def test_one_unreadable_additional_tax_makes_other_taxes_illegible_but_not_vat():
+    # Caso real: el ILL tapado por una perforación; sumar solo los legibles daría un monto falso
     result = normalize_extraction(
         fields(tax_lines=[tax_line("431"), tax_line("?", label="ILL(10,0%)", status="ILEGIBLE", confidence=0.2)])
     )
-    tax = result.fields["TAX_AMOUNT"]
-    assert (tax.status, tax.value) == ("ILEGIBLE", None)
-    assert "ILL(10,0%)" in tax.invalid_reason and result.vat_amount is None
+    assert (result.fields["VAT_AMOUNT"].status, result.fields["VAT_AMOUNT"].value) == ("LEIDO", Decimal(431))
+    other = result.fields["OTHER_TAXES_AMOUNT"]
+    assert (other.status, other.value) == ("ILEGIBLE", None) and "ILL(10,0%)" in other.invalid_reason
 
 
-def test_no_tax_lines_means_taxes_absent():
+def test_no_tax_lines_means_both_absent():
     result = normalize_extraction(fields(tax_lines=[]))
-    assert (result.fields["TAX_AMOUNT"].status, result.fields["TAX_AMOUNT"].value) == ("AUSENTE", None)
+    assert result.fields["VAT_AMOUNT"].status == result.fields["OTHER_TAXES_AMOUNT"].status == "AUSENTE"

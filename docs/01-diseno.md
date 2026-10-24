@@ -26,18 +26,19 @@ Lote ─► Recepción (originales + sha256) ─► Preprocesador ─► página
 - **Clasificación:** solo con el título impreso como evidencia ("FACTURA ELECTRONICA",
   "CONTROL INTERNO", "GUIA DE DESPACHO" o "GUIA ELECTRONICA"). Todo lo demás (boletas, facturas exentas, notas de
   crédito, fotos…) es `DESCONOCIDO`.
-- **Obligatorios:** RUT del prestador, número, fecha de emisión, monto neto y monto total.
-  **Opcionales:** impuestos y monto exento. Una guía de despacho sin montos es válida: sus montos
+- **Obligatorios:** RUT del prestador, número, fecha de emisión, monto neto, **IVA** y monto total.
+  **Opcionales:** otros impuestos y monto exento. Una guía de despacho sin montos es válida: sus montos
   quedan `AUSENTE` y la validación `NO_APLICA`.
 - **Cada campo:** `LEIDO`, `AUSENTE` (no aparece) o `ILEGIBLE` (aparece pero no se lee con
   seguridad). Ausente ≠ 0.
 - **RUT ilegible** (o con dígito verificador incorrecto): se guarda `1-9` con `rut_is_substitute`.
-- **Suma:** neto + impuestos + exento = total, con tolerancia `TOTAL_TOLERANCE_CLP` (0). Un
+- **Suma:** neto + IVA + otros impuestos + exento = total, con tolerancia `TOTAL_TOLERANCE_CLP` (0). Un
   opcional ausente no suma; uno ilegible deja la validación `INCOMPLETA` (nunca `DESCUADRE`).
-- **Impuestos = suma de todas las líneas de impuesto** (IVA, ILL, impuesto adicional…). El extractor
-  lee cada línea por separado y el código las suma; si alguna no se lee (por ejemplo, tapada por una
-  perforación), Impuestos queda `ILEGIBLE`. El IVA se guarda aparte (`vat_amount`) para comprobar el
-  19 % aunque haya otros impuestos.
+- **IVA y otros impuestos:** el extractor lee cada línea de impuesto por separado y el código las
+  clasifica por su nombre: el **IVA** va a `vat_amount` (campo `VAT_AMOUNT`, obligatorio) y los demás
+  (IABA 10 %, IABA 18 %, ILA VIN 20,5 %, ILA CER 20,5 %, ILA 31,5 %…) se suman en
+  `other_taxes_amount` (`OTHER_TAXES_AMOUNT`, opcional). Si una línea no se lee (por ejemplo, tapada por
+  una perforación), su campo queda `ILEGIBLE`: sumar solo las legibles daría un monto falso.
 
 ## Lecturas no fiables: doble lectura
 

@@ -94,8 +94,10 @@ function fieldValue(name, run) {
       return shortDate(run.issue_date)
     case 'NET_AMOUNT':
       return clp(run.net_amount)
-    case 'TAX_AMOUNT':
-      return clp(run.tax_amount)
+    case 'VAT_AMOUNT':
+      return clp(run.vat_amount)
+    case 'OTHER_TAXES_AMOUNT':
+      return clp(run.other_taxes_amount)
     case 'EXEMPT_AMOUNT':
       return clp(run.exempt_amount)
     default:
@@ -154,7 +156,8 @@ function Fields({ fields, run }) {
 function Sum({ run }) {
   const parts = [
     ['Neto', run.net_amount],
-    ['Impuestos', run.tax_amount],
+    ['IVA', run.vat_amount],
+    ['Otros impuestos', run.other_taxes_amount],
     ['Exento', run.exempt_amount],
   ]
   return (

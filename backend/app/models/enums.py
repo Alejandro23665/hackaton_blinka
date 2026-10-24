@@ -24,7 +24,9 @@ FIELD_NAMES = (
     "DOCUMENT_NUMBER",
     "ISSUE_DATE",
     "NET_AMOUNT",
-    "TAX_AMOUNT",
+    # IVA: obligatorio. Otros impuestos (IABA, ILA…): opcionales, se guardan sumados
+    "VAT_AMOUNT",
+    "OTHER_TAXES_AMOUNT",
     "EXEMPT_AMOUNT",
     "TOTAL_AMOUNT",
 )

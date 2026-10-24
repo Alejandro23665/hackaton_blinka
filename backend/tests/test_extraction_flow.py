@@ -29,7 +29,7 @@ def test_invoice_fields_are_extracted_and_normalized(client, fake_ai):
 
     detail = _document(client, lot)
     run = detail["run"]
-    assert (float(run["net_amount"]), float(run["tax_amount"]), float(run["total_amount"])) == (100000, 19000, 119000)
+    assert (float(run["net_amount"]), float(run["vat_amount"]), float(run["total_amount"])) == (100000, 19000, 119000)
     assert run["exempt_amount"] is None  # ausente, no 0
     assert run["rut_is_substitute"] is False
     assert (run["technical_status"], run["overall_status"]) == ("COMPLETADO", "PROCESADO")
@@ -95,7 +95,7 @@ def test_multi_page_document_sends_all_its_pages(client, fake_ai):
 def test_unvalued_dispatch_guide_does_not_require_amounts(client, fake_ai):
     fake_ai.pages = {1: page_response(detected("GUIA_DESPACHO", "GUÍA DE DESPACHO", "77"))}
     fake_ai.extractions = [
-        extraction(NET_AMOUNT=ABSENT, TAX_AMOUNT=ABSENT, EXEMPT_AMOUNT=ABSENT, TOTAL_AMOUNT=ABSENT)
+        extraction(NET_AMOUNT=ABSENT, VAT_AMOUNT=ABSENT, EXEMPT_AMOUNT=ABSENT, TOTAL_AMOUNT=ABSENT)
     ]
     detail = _document(client, _lot(client, ("guia.png", image_bytes(), "image/png")))
     required = {f["field_name"] for f in detail["fields"] if f["is_required"]}

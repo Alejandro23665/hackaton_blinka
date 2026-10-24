@@ -14,7 +14,7 @@ from app.ai import client
 from app.core.config import settings
 from app.models.enums import FIELD_NAMES
 
-PROMPT_VERSION = "ext-6"
+PROMPT_VERSION = "ext-7"
 # Margen alrededor de la zona del documento al recortarla (proporción de la página)
 CROP_MARGIN = 0.03
 
@@ -33,8 +33,9 @@ class SignatureReading(BaseModel):
     description: str | None
 
 
-# TAX_AMOUNT no lo lee la IA: el código lo calcula sumando las líneas de impuesto
-READ_FIELDS = tuple(name for name in FIELD_NAMES if name != "TAX_AMOUNT")
+# IVA y otros impuestos no los lee la IA como campos: el código los calcula con las líneas de impuesto
+TAX_FIELDS = ("VAT_AMOUNT", "OTHER_TAXES_AMOUNT")
+READ_FIELDS = tuple(name for name in FIELD_NAMES if name not in TAX_FIELDS)
 
 
 class TaxLine(BaseModel):
@@ -124,7 +125,7 @@ no el del cliente o receptor.
 - EXEMPT_AMOUNT: monto exento.
 - TOTAL_AMOUNT: monto total.
 
-Y aparte, en tax_lines, CADA línea de impuesto por separado: IVA, ILL (impuesto a licores), impuesto adicional, impuesto específico, etc. Una entrada por línea, con su nombre (label) y su monto (raw_text). No las sumes ni incluyas neto, exento ni total. Si el monto de una línea está tapado (por ejemplo, por una perforación o un timbre) o no se lee, igualmente inclúyela con status ILEGIBLE y ? en lo que no se ve. Si el documento no tiene ninguna línea de impuesto, tax_lines es una lista vacía.
+Y aparte, en tax_lines, CADA línea de impuesto por separado, con su nombre tal como aparece (label) y su monto (raw_text). Los impuestos posibles son: IVA (19 %), IABA 10%, IABA 18%, ILA VIN 20.5%, ILA CER 20.5%, ILA 31.5% (también impresos como ILL o "Imp. Adic."). Una entrada por línea; no las sumes ni incluyas neto, exento ni total. Si el monto de una línea está tapado (por ejemplo, por una perforación o un timbre) o no se lee, igualmente inclúyela con status ILEGIBLE y ? en lo que no se ve. Si el documento no tiene ninguna línea de impuesto, tax_lines es una lista vacía.
 
 Para cada campo devuelve:
 - status: LEIDO si aparece y lo lees con seguridad; AUSENTE si no aparece en el documento; \

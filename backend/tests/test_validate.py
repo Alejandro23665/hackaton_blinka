@@ -14,7 +14,8 @@ def _case(doc_type="FACTURA_ELECTRONICA", tolerance=ZERO, **overrides):
         "DOCUMENT_NUMBER": ("LEIDO", "000123"),
         "ISSUE_DATE": ("LEIDO", date(2026, 10, 14)),
         "NET_AMOUNT": ("LEIDO", Decimal(100000)),
-        "TAX_AMOUNT": ("LEIDO", Decimal(19000)),
+        "VAT_AMOUNT": ("LEIDO", Decimal(19000)),
+        "OTHER_TAXES_AMOUNT": ("AUSENTE", None),
         "EXEMPT_AMOUNT": ("AUSENTE", None),
         "TOTAL_AMOUNT": ("LEIDO", Decimal(119000)),
     }
@@ -60,8 +61,20 @@ def test_case_3_partially_illegible_is_not_legible_but_keeps_the_rest():
 
 
 def test_case_5_absent_optional_fields_are_not_errors():
-    result = _case(TAX_AMOUNT=ABSENT, EXEMPT_AMOUNT=ABSENT, TOTAL_AMOUNT=("LEIDO", Decimal(100000)))
-    assert (result.overall_status, result.calculated_total, result.issues) == ("PROCESADO", Decimal(100000), [])
+    # Otros impuestos y exento ausentes: no suman y no son error
+    result = _case(OTHER_TAXES_AMOUNT=ABSENT, EXEMPT_AMOUNT=ABSENT)
+    assert (result.overall_status, result.calculated_total, result.issues) == ("PROCESADO", Decimal(119000), [])
+
+
+def test_vat_is_required():
+    result = _case(VAT_AMOUNT=ABSENT, TOTAL_AMOUNT=("LEIDO", Decimal(100000)))
+    assert (result.extraction_status, result.overall_status) == ("INCOMPLETA", "NO_LEGIBLE")
+    assert "CAMPO_OBLIGATORIO_AUSENTE" in _codes(result) and "IVA" in result.review_reason
+
+
+def test_other_taxes_are_added_to_the_sum():
+    result = _case(OTHER_TAXES_AMOUNT=("LEIDO", Decimal(20500)), TOTAL_AMOUNT=("LEIDO", Decimal(139500)))
+    assert (result.validation_status, result.calculated_total) == ("CUADRA", Decimal(139500))
 
 
 # (El caso 4, documento desconocido, no llega al validador: termina tras la clasificación.)
@@ -84,14 +97,14 @@ def test_missing_amounts_never_produce_a_mismatch():
 
 
 def test_illegible_optional_field_blocks_the_sum_check():
-    result = _case(TAX_AMOUNT=ILLEGIBLE)
+    result = _case(OTHER_TAXES_AMOUNT=ILLEGIBLE)
     assert result.extraction_status == "COMPLETA"
     assert (result.validation_status, result.overall_status) == ("INCOMPLETA", "NO_LEGIBLE")
-    assert "impuestos" in result.review_reason
+    assert "otros impuestos" in result.review_reason
 
 
 def test_explicit_zero_is_a_value():
-    result = _case(TAX_AMOUNT=("LEIDO", ZERO), EXEMPT_AMOUNT=("LEIDO", Decimal(19000)))
+    result = _case(VAT_AMOUNT=("LEIDO", ZERO), EXEMPT_AMOUNT=("LEIDO", Decimal(19000)))
     assert (result.validation_status, result.calculated_total) == ("CUADRA", Decimal(119000))
 
 
@@ -103,7 +116,7 @@ def test_required_absent_field_is_reported():
 
 def test_unvalued_dispatch_guide_is_processed_without_sum():
     result = _case(
-        "GUIA_DESPACHO", NET_AMOUNT=ABSENT, TAX_AMOUNT=ABSENT, EXEMPT_AMOUNT=ABSENT, TOTAL_AMOUNT=ABSENT
+        "GUIA_DESPACHO", NET_AMOUNT=ABSENT, VAT_AMOUNT=ABSENT, EXEMPT_AMOUNT=ABSENT, TOTAL_AMOUNT=ABSENT
     )
     assert (result.extraction_status, result.validation_status, result.overall_status) == (
         "COMPLETA", "NO_APLICA", "PROCESADO"
@@ -111,7 +124,7 @@ def test_unvalued_dispatch_guide_is_processed_without_sum():
 
 
 def test_valued_dispatch_guide_requires_net_and_total():
-    result = _case("GUIA_DESPACHO", NET_AMOUNT=ABSENT, TAX_AMOUNT=ABSENT)
+    result = _case("GUIA_DESPACHO", NET_AMOUNT=ABSENT, VAT_AMOUNT=ABSENT)
     assert result.overall_status == "NO_LEGIBLE"
 
 
@@ -121,33 +134,20 @@ def test_tolerance_is_configurable():
 
 
 def test_vat_different_from_19_percent_is_a_warning_not_a_mismatch():
-    result = _case(TAX_AMOUNT=("LEIDO", Decimal(25000)), TOTAL_AMOUNT=("LEIDO", Decimal(125000)))
+    result = _case(VAT_AMOUNT=("LEIDO", Decimal(25000)), TOTAL_AMOUNT=("LEIDO", Decimal(125000)))
     assert result.overall_status == "PROCESADO"
     assert _codes(result) == ["IVA_NO_CORRESPONDE_19"]
     # Solo en facturas electrónicas
-    other = _case("CONTROL_INTERNO", TAX_AMOUNT=("LEIDO", Decimal(25000)), TOTAL_AMOUNT=("LEIDO", Decimal(125000)))
+    other = _case("CONTROL_INTERNO", VAT_AMOUNT=("LEIDO", Decimal(25000)), TOTAL_AMOUNT=("LEIDO", Decimal(125000)))
     assert other.issues == []
 
 
-def test_vat_check_uses_vat_alone_when_there_are_other_taxes():
-    # Neto 2.267: IVA 431 + ILL 227 = 658 de impuestos; el IVA sí es el 19 %
-    fields = {
-        "NET_AMOUNT": ("LEIDO", Decimal(2267)),
-        "TAX_AMOUNT": ("LEIDO", Decimal(658)),
-        "TOTAL_AMOUNT": ("LEIDO", Decimal(2925)),
-    }
-    statuses = {name: status for name, (status, _) in {**_base(), **fields}.items()}
-    values = {name: value for name, (_, value) in {**_base(), **fields}.items()}
-    with_vat = validate("FACTURA_ELECTRONICA", statuses, values, ZERO, vat=Decimal(431))
-    assert (with_vat.overall_status, with_vat.issues) == ("PROCESADO", [])
-    without_vat = validate("FACTURA_ELECTRONICA", statuses, values, ZERO)
-    assert _codes(without_vat) == ["IVA_NO_CORRESPONDE_19"]
-
-
-def _base():
-    return {
-        "PROVIDER_RUT": ("LEIDO", "76084682-1"),
-        "DOCUMENT_NUMBER": ("LEIDO", "1352386"),
-        "ISSUE_DATE": ("LEIDO", date(2026, 10, 19)),
-        "EXEMPT_AMOUNT": ("LEIDO", ZERO),
-    }
+def test_vat_check_ignores_other_taxes():
+    # Neto 2.267: IVA 431 (19 %) + ILA 227 = 2.925
+    result = _case(
+        NET_AMOUNT=("LEIDO", Decimal(2267)),
+        VAT_AMOUNT=("LEIDO", Decimal(431)),
+        OTHER_TAXES_AMOUNT=("LEIDO", Decimal(227)),
+        TOTAL_AMOUNT=("LEIDO", Decimal(2925)),
+    )
+    assert (result.overall_status, result.issues) == ("PROCESADO", [])
