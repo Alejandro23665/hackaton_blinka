@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     OPENROUTER_MAX_RETRIES: int = 2
     # Modelos de respaldo separados por coma; OpenRouter los usa si el principal falla
     OPENROUTER_FALLBACK_MODELS: str = ""
+    # Modelo de cada agente; vacío = OPENROUTER_MODEL
+    SEGMENTER_MODEL: str | None = None
+
+    # Caché de respuestas de la IA en disco: repetir una llamada idéntica (misma imagen, mismas
+    # instrucciones, mismo modelo) no gasta cuota. Se comparte entre bases de datos.
+    AI_CACHE_ENABLED: bool = True
+    AI_CACHE_DIR: Path = BACKEND_DIR / ".ai_cache"
 
     @field_validator("DATABASE_URL")
     @classmethod

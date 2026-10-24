@@ -11,7 +11,7 @@ trazabilidad. Diseño completo en [docs/01-diseno.md](docs/01-diseno.md).
 | Etapa | Contenido | Estado |
 |---|---|---|
 | 5.1 Base | Modelos, migración, almacenamiento, preprocesador, subida de lotes | Hecha |
-| 5.2 | Segmentador-clasificador (IA) y agrupador | Pendiente |
+| 5.2 | Segmentador-clasificador (IA) y agrupador | Hecha |
 | 5.3 | Extractor (IA) y normalizador | Pendiente |
 | 5.4 | Validador, estados y persistencia | Pendiente |
 | 5.5 | Evaluación con muestras reales | Pendiente |
@@ -29,7 +29,8 @@ hackaton_blinka/
 │   │   ├── main.py           # FastAPI
 │   │   ├── core/config.py    # Configuración (.env)
 │   │   ├── models/           # Tablas: lotes, archivos, páginas, documentos, procesamientos…
-│   │   ├── pipeline/         # intake (recepción), preprocess, orchestrator
+│   │   ├── ai/client.py      # OpenRouter: reintentos, JSON estricto y caché de respuestas
+│   │   ├── pipeline/         # intake, preprocess, segmenter (IA), grouper, orchestrator
 │   │   ├── storage.py        # Almacenamiento de archivos
 │   │   ├── schemas.py        # DTOs de la API
 │   │   └── api/              # submissions, files
@@ -51,18 +52,23 @@ alembic upgrade head
 uvicorn app.main:app --reload    # http://localhost:8000/docs
 ```
 
-## API (etapa 5.1)
+## API
 
 | Método | Ruta | Qué hace |
 |---|---|---|
 | POST | `/submissions` | Sube un lote (`files`: una o varias imágenes o PDF). Responde al instante y procesa en segundo plano |
 | GET | `/submissions` | Lotes recientes con número de archivos y páginas |
-| GET | `/submissions/{id}` | Estado del lote, sus archivos y páginas |
+| GET | `/submissions/{id}` | Estado del lote, sus archivos, páginas (con su clasificación) y documentos detectados |
 | POST | `/submissions/{id}/process` | Reprocesa: retoma lo pendiente y reintenta lo fallido |
 | GET | `/files/{id}` | Archivo original |
 | GET | `/pages/{id}/image` | Imagen de una página (lo que ve la IA) |
 
 Un archivo repetido (mismo contenido) no se guarda dos veces: el lote lo reutiliza y lo avisa.
+
+**Caché de la IA:** cada respuesta del modelo se guarda en `backend/.ai_cache/` (excluida de git).
+Una llamada idéntica (misma imagen, mismas instrucciones, mismo modelo) no vuelve a gastar cuota.
+Si se agota la cuota o la clave es rechazada, el lote se detiene; `POST /submissions/{id}/process`
+lo retoma sin repetir lo ya clasificado.
 
 ## Tests
 

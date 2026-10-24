@@ -5,10 +5,28 @@ from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from app.api.deps import SessionDep
-from app.models import Page, StoredFile, Submission, SubmissionFile
+from app.models import (
+    DocumentRegion,
+    Page,
+    PageClassification,
+    ProcessingRun,
+    RunIssue,
+    StoredFile,
+    Submission,
+    SubmissionFile,
+)
 from app.pipeline import intake
 from app.pipeline.orchestrator import process_submission
-from app.schemas import PageRead, StoredFileRead, SubmissionCreated, SubmissionRead, SubmissionSummary
+from app.schemas import (
+    DocumentPageRead,
+    DocumentSummary,
+    IssueRead,
+    PageRead,
+    StoredFileRead,
+    SubmissionCreated,
+    SubmissionRead,
+    SubmissionSummary,
+)
 
 router = APIRouter(prefix="/submissions", tags=["submissions"])
 
@@ -26,18 +44,105 @@ def _detail(session: Session, submission: Submission) -> SubmissionRead:
             select(Page).where(col(Page.file_id).in_(list(pages))).order_by(col(Page.page_number))
         ).all():
             pages[page.file_id].append(page)
+    all_pages = {p.id: p for file_pages in pages.values() for p in file_pages}
+    classifications = _latest_classifications(session, list(all_pages))
+
+    def page_read(page: Page) -> PageRead:
+        found = classifications.get(page.id)
+        return PageRead.model_validate(page).model_copy(
+            update={
+                "classification_status": found.status if found else None,
+                "classification_error": found.error if found else None,
+            }
+        )
+
     return SubmissionRead(
         id=submission.id,
         received_at=submission.received_at,
         source=submission.source,
         status=submission.status,
         files=[
-            StoredFileRead.model_validate(f).model_copy(
-                update={"pages": [PageRead.model_validate(p) for p in pages[f.id]]}
-            )
+            StoredFileRead.model_validate(f).model_copy(update={"pages": [page_read(p) for p in pages[f.id]]})
             for f in files
         ],
+        documents=_documents(session, all_pages, {f.id: i for i, f in enumerate(files)}),
     )
+
+
+def _latest_classifications(session: Session, page_ids: list[uuid.UUID]) -> dict[uuid.UUID, PageClassification]:
+    """La clasificación actual de cada página o, si no hay, el último intento fallido."""
+    found: dict[uuid.UUID, PageClassification] = {}
+    if page_ids:
+        for item in session.exec(
+            select(PageClassification)
+            .where(col(PageClassification.page_id).in_(page_ids))
+            .order_by(col(PageClassification.created_at))
+        ).all():
+            current = found.get(item.page_id)
+            if current is None or not current.is_current:
+                found[item.page_id] = item
+    return found
+
+
+def _documents(
+    session: Session, pages: dict[uuid.UUID, Page], file_order: dict[uuid.UUID, int]
+) -> list[DocumentSummary]:
+    """Documentos que aparecen en las páginas del lote, en orden de aparición, con su último procesamiento."""
+    if not pages:
+        return []
+    regions = session.exec(select(DocumentRegion).where(col(DocumentRegion.page_id).in_(list(pages)))).all()
+    by_document: dict[uuid.UUID, list[DocumentRegion]] = {}
+    for region in regions:
+        by_document.setdefault(region.document_id, []).append(region)
+    if not by_document:
+        return []
+
+    runs: dict[uuid.UUID, ProcessingRun] = {}
+    for run in session.exec(
+        select(ProcessingRun)
+        .where(col(ProcessingRun.document_id).in_(list(by_document)))
+        .order_by(col(ProcessingRun.run_number))
+    ).all():
+        runs[run.document_id] = run
+    issues: dict[uuid.UUID, list[RunIssue]] = {}
+    if runs:
+        for issue in session.exec(
+            select(RunIssue).where(col(RunIssue.run_id).in_([r.id for r in runs.values()]))
+        ).all():
+            issues.setdefault(issue.run_id, []).append(issue)
+
+    def first_page(item: tuple[uuid.UUID, list[DocumentRegion]]):
+        region = min(item[1], key=lambda r: r.position_in_document)
+        page = pages[region.page_id]
+        return (file_order[page.file_id], page.page_number, region.index_on_page)
+
+    result = []
+    for document_id, doc_regions in sorted(by_document.items(), key=first_page):
+        run = runs.get(document_id)
+        result.append(
+            DocumentSummary(
+                id=document_id,
+                doc_type=run.doc_type if run else None,
+                classification_confidence=run.classification_confidence if run else None,
+                classification_evidence=run.classification_evidence if run else None,
+                technical_status=run.technical_status if run else "EN_PROCESO",
+                overall_status=run.overall_status if run else None,
+                review_reason=run.review_reason if run else None,
+                pages=[
+                    DocumentPageRead(
+                        page_id=r.page_id,
+                        file_id=pages[r.page_id].file_id,
+                        page_number=pages[r.page_id].page_number,
+                        index_on_page=r.index_on_page,
+                        bbox=r.bbox,
+                        position_hint=r.position_hint,
+                    )
+                    for r in sorted(doc_regions, key=lambda r: r.position_in_document)
+                ],
+                issues=[IssueRead.model_validate(i) for i in issues.get(run.id, [])] if run else [],
+            )
+        )
+    return result
 
 
 @router.post("", response_model=SubmissionCreated, status_code=status.HTTP_201_CREATED)

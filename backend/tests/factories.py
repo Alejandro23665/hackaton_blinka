@@ -29,3 +29,26 @@ def pdf_bytes(pages: int, size: tuple[int, int] = (850, 1100)) -> bytes:
     buffer = io.BytesIO()
     images[0].save(buffer, format="PDF", save_all=True, append_images=images[1:])
     return buffer.getvalue()
+
+
+# --- Respuestas simuladas del segmentador-clasificador ---
+
+def detected(doc_type="DESCONOCIDO", evidence=None, number=None, continuation=False, index=1, region=None, confidence=0.95):
+    return {
+        "index": index,
+        "doc_type": doc_type,
+        "confidence": confidence,
+        "evidence": evidence,
+        "document_number_seen": number,
+        "continuation_of_previous": continuation,
+        "region": region or {"x": 0, "y": 0, "w": 1, "h": 1},
+        "position_hint": "página completa",
+    }
+
+
+def page_response(*documents, quality="ALTA", issues=None):
+    return {"page_quality": {"level": quality, "issues": issues or []}, "documents": list(documents)}
+
+
+def unknown_page():
+    return page_response(detected())
