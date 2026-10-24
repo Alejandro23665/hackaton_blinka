@@ -24,7 +24,7 @@ Lote ─► Recepción (originales + sha256) ─► Preprocesador ─► página
 ## Reglas
 
 - **Clasificación:** solo con el título impreso como evidencia ("FACTURA ELECTRONICA",
-  "CONTROL INTERNO", "GUIA DE DESPACHO"). Todo lo demás (boletas, facturas exentas, notas de
+  "CONTROL INTERNO", "GUIA DE DESPACHO" o "GUIA ELECTRONICA"). Todo lo demás (boletas, facturas exentas, notas de
   crédito, fotos…) es `DESCONOCIDO`.
 - **Obligatorios:** RUT del prestador, número, fecha de emisión, monto neto y monto total.
   **Opcionales:** impuestos y monto exento. Una guía de despacho sin montos es válida: sus montos
@@ -52,6 +52,8 @@ una factura se ignora: no es un documento y nunca se toman de ella el número ni
 **Control interno en ticket:** los controles internos suelen ser tickets térmicos (por ejemplo de
 OXXO) **con** un recuadro "R.U.T. / CONTROL INTERNO / N°" y NETO, EXENTO, IVA y TOTAL. Se clasifican
 como `CONTROL_INTERNO` aunque parezcan boletas. Su número puede venir con punto de miles (`2.397`).
+Las guías de despacho en ticket se titulan a veces solo **"GUÍA ELECTRÓNICA"** (recuadro con R.U.T. y
+N°, timbre del SII abajo) y se clasifican como `GUIA_DESPACHO`.
 
 ## Estados (dimensiones separadas)
 

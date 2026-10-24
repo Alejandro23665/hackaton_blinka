@@ -22,6 +22,7 @@ REAL_CALL_JSON = ai.call_json
         ("FACTURA_ELECTRONICA", "FACTURA ELECTRÓNICA"),
         ("FACTURA_ELECTRONICA", "Factura  Electronica"),
         ("GUIA_DESPACHO", "GUÍA DE DESPACHO ELECTRÓNICA"),
+        ("GUIA_DESPACHO", "GUIA ELECTRÓNICA"),  # tickets de OXXO
         ("CONTROL_INTERNO", "CONTROL INTERNO"),
     ],
 )

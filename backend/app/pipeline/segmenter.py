@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from app.ai import client
 from app.core.config import settings
 
-PROMPT_VERSION = "seg-3"
+PROMPT_VERSION = "seg-4"
 
 DocType = Literal["GUIA_DESPACHO", "CONTROL_INTERNO", "FACTURA_ELECTRONICA", "DESCONOCIDO"]
 
@@ -112,7 +112,7 @@ aparecen en ella y de qué tipo es cada uno.
 
 Tipos admitidos, solo si ves el título impreso en el documento:
 - FACTURA_ELECTRONICA: el título dice "FACTURA ELECTRÓNICA".
-- GUIA_DESPACHO: el título dice "GUÍA DE DESPACHO" (con o sin "ELECTRÓNICA").
+- GUIA_DESPACHO: el título dice "GUÍA DE DESPACHO" (con o sin "ELECTRÓNICA") o solo "GUÍA ELECTRÓNICA". También suele ser un ticket térmico (por ejemplo de OXXO) con un recuadro "R.U.T. / GUIA ELECTRÓNICA / N°", montos NETO, EXENTO, IVA y TOTAL y un timbre electrónico del SII (código de barras) abajo.
 - CONTROL_INTERNO: el título dice "CONTROL INTERNO". Suele ser un ticket de papel térmico angosto (por ejemplo de OXXO) con un recuadro que dice "R.U.T.", "CONTROL INTERNO" y "N°", y abajo NETO, EXENTO, IVA y TOTAL. Aunque parezca una boleta, si el recuadro dice CONTROL INTERNO es un CONTROL_INTERNO.
 - DESCONOCIDO: todo lo demás: boletas, facturas exentas o no afectas, notas de crédito o débito, \
 facturas de compra, liquidaciones, fotos, páginas en blanco, o documentos cuyo título no se ve o no se lee.
@@ -171,11 +171,12 @@ def describe(doc_type: str, number: str | None) -> str:
 
 # --- Comprobaciones del código sobre la respuesta -------------------------------------------
 
-# Palabras que debe contener la evidencia para aceptar cada tipo
+# Títulos aceptados como evidencia de cada tipo (basta uno)
 _REQUIRED = {
-    "FACTURA_ELECTRONICA": "FACTURA ELECTRONICA",
-    "GUIA_DESPACHO": "GUIA DE DESPACHO",
-    "CONTROL_INTERNO": "CONTROL INTERNO",
+    "FACTURA_ELECTRONICA": ("FACTURA ELECTRONICA",),
+    # La guía de despacho electrónica también se imprime solo como "GUÍA ELECTRÓNICA" (tickets OXXO)
+    "GUIA_DESPACHO": ("GUIA DE DESPACHO", "GUIA ELECTRONICA"),
+    "CONTROL_INTERNO": ("CONTROL INTERNO",),
 }
 # Documentos parecidos que no son del tipo admitido (factura exenta, liquidación-factura…)
 _EXCLUDED = {"FACTURA_ELECTRONICA": ("EXENTA", "NO AFECTA", "LIQUIDACION", "NOTA DE CREDITO", "NOTA DE DEBITO")}
@@ -198,7 +199,8 @@ def verify_type(doc_type: str, evidence: str | None, confidence: float) -> tuple
     if doc_type == "DESCONOCIDO":
         return doc_type, []
     plain = normalize_text(evidence or "")
-    if _REQUIRED[doc_type] not in plain or any(word in plain for word in _EXCLUDED.get(doc_type, ())):
+    matches = any(title in plain for title in _REQUIRED[doc_type])
+    if not matches or any(word in plain for word in _EXCLUDED.get(doc_type, ())):
         return "DESCONOCIDO", [
             {
                 "code": "CLASIFICACION_SIN_EVIDENCIA",

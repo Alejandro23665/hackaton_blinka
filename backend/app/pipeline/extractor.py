@@ -14,7 +14,7 @@ from app.ai import client
 from app.core.config import settings
 from app.models.enums import FIELD_NAMES
 
-PROMPT_VERSION = "ext-3"
+PROMPT_VERSION = "ext-4"
 # Margen alrededor de la zona del documento al recortarla (proporción de la página)
 CROP_MARGIN = 0.03
 
@@ -102,8 +102,11 @@ documento, ese campo es ILEGIBLE.
 _TYPE_HINTS = {
     "FACTURA_ELECTRONICA": "Es una FACTURA ELECTRÓNICA: normalmente tiene monto neto, IVA y total; "
     "el monto exento solo aparece en facturas con ítems exentos.",
-    "GUIA_DESPACHO": "Es una GUÍA DE DESPACHO: puede no tener montos (traslado sin valorizar). "
-    "Si no hay ninguna sección de montos, marca los cuatro montos como AUSENTE.",
+    "GUIA_DESPACHO": "Es una GUÍA DE DESPACHO (también titulada GUÍA ELECTRÓNICA): puede no tener montos "
+    "(traslado sin valorizar); si no hay ninguna sección de montos, marca los cuatro montos como AUSENTE. "
+    "A menudo es un ticket térmico (por ejemplo de OXXO): RUT y número en el recuadro superior, \"FECHA :\" "
+    "y montos NETO, EXENTO, IVA 19% y TOTAL. Un EXENTO que muestra 0 es 0 (LEIDO). El RUT del emisor es el "
+    "del recuadro, no el del receptor (\"Srs:\") ni los campos vacíos del pie.",
     "CONTROL_INTERNO": "Es un CONTROL INTERNO, a menudo un ticket térmico (por ejemplo de OXXO): el RUT y el "
     "número están en el recuadro superior (R.U.T. y N°); la fecha suele estar como \"FECHA :\" y los montos "
     "abajo como NETO, EXENTO, IVA 19% y TOTAL. Un EXENTO que muestra 0 es 0 (LEIDO), no ausente. No confundas "
