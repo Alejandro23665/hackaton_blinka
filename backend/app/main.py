@@ -7,10 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
-from app.api import decisions, documents, exchange_rates, invoices, policies, vendors
+from app.api import files, submissions
 from app.core.config import settings
 
-app = FastAPI(title="Rekreuz API", version="0.1.0")
+app = FastAPI(title="Procesamiento de documentos", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -52,17 +52,13 @@ async def require_password(request: Request, call_next):
         return Response(
             "Acceso restringido",
             status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="Rekreuz", charset="UTF-8"'},
+            headers={"WWW-Authenticate": 'Basic realm="Documentos", charset="UTF-8"'},
         )
     return await call_next(request)
 
 
-app.include_router(vendors.router)
-app.include_router(policies.router)
-app.include_router(invoices.router)
-app.include_router(decisions.router)
-app.include_router(documents.router)
-app.include_router(exchange_rates.router)
+app.include_router(submissions.router)
+app.include_router(files.router)
 
 
 @app.get("/health")

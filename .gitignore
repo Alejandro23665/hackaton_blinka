@@ -4,5 +4,7 @@ __pycache__/
 .venv/
 node_modules/
 dist/
-# Facturas subidas (datos reales, no van a git)
+# Documentos subidos e imágenes de páginas (datos reales, no van a git)
 backend/storage/
+# Muestras reales y sus respuestas correctas para evaluar (nunca van a git)
+muestras/

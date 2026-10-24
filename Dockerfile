@@ -1,4 +1,4 @@
-# Blinka en un solo servicio: FastAPI sirve la API y el frontend compilado.
+# Un solo servicio: FastAPI sirve la API y el frontend compilado.
 # Sirve igual para Render y Railway (ver docs/04-despliegue.md).
 
 # ---- 1) Frontend: se compila y solo se conserva dist/ ----
@@ -22,11 +22,9 @@ RUN pip install -r requirements.txt
 
 COPY backend/ ./
 COPY --from=frontend /app/frontend/dist /app/frontend/dist
-# Set ficticio: permite cargar la demo en el servidor con `python -m app.demo --reset`
-COPY dataset/ /app/dataset/
 
-# Usuario sin privilegios
-RUN useradd --create-home blinka && chown -R blinka /app
+# Usuario sin privilegios. STORAGE_DIR debe apuntar a un volumen persistente (docs/04-despliegue.md)
+RUN useradd --create-home blinka && mkdir -p /app/backend/storage && chown -R blinka /app
 USER blinka
 
 EXPOSE 8000
