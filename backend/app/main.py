@@ -7,10 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
-from app.api import documents, files, submissions
+from app.api import documentos, trabajos
 from app.core.config import settings
 
-app = FastAPI(title="Procesamiento de documentos", version="0.2.0")
+app = FastAPI(title="Procesamiento de documentos", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -57,9 +57,8 @@ async def require_password(request: Request, call_next):
     return await call_next(request)
 
 
-app.include_router(submissions.router)
-app.include_router(documents.router)
-app.include_router(files.router)
+app.include_router(trabajos.router)
+app.include_router(documentos.router)
 
 
 @app.get("/health")

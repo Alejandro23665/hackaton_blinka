@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.ai import client
 from app.core.config import settings
-from app.models.enums import FIELD_NAMES
+from app.pipeline.fields import FIELD_NAMES
 
 PROMPT_VERSION = "ext-7"
 # Margen alrededor de la zona del documento al recortarla (proporción de la página)

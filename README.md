@@ -1,8 +1,9 @@
-# Procesamiento de documentos con agentes de IA
+# Procesamiento de documentos con agentes de IA (Oxxo)
 
-Recibe lotes de imágenes o PDF con guías de despacho, controles internos y facturas electrónicas;
-separa y clasifica cada documento, extrae sus datos, valida los montos y lo guarda todo con
-trazabilidad. Diseño completo en [docs/01-diseno.md](docs/01-diseno.md).
+Recibe imágenes o PDF con guías de despacho, controles internos y facturas electrónicas; separa y
+clasifica cada documento, extrae sus datos, valida los montos y guarda una fila por documento en
+`documentos_procesados`. Los no legibles y los descuadrados quedan marcados para revisión humana.
+Diseño en [docs/01-diseno.md](docs/01-diseno.md).
 
 > El proyecto anterior (Rekreuz, aprobación de pagos) se conserva en la rama `rekreuz-final`.
 
@@ -10,33 +11,51 @@ trazabilidad. Diseño completo en [docs/01-diseno.md](docs/01-diseno.md).
 
 | Etapa | Contenido | Estado |
 |---|---|---|
-| 5.1 Base | Modelos, migración, almacenamiento, preprocesador, subida de lotes | Hecha |
-| 5.2 | Segmentador-clasificador (IA) y agrupador | Hecha |
-| 5.3 | Extractor (IA) y normalizador | Hecha |
-| 5.4 | Validador, estados y persistencia | Hecha |
+| 5.1–5.4 | Lectura con IA: segmentar, clasificar, extraer (doble lectura), normalizar y validar | Hecha |
 | 5.5 | Evaluación con muestras reales | En curso (58 imágenes) |
-| 5.6 | Interfaz | Hecha |
+| R1 | Base de datos desde cero (4 tablas, `db/*.sql`) y backend adaptado | Hecha |
+| R2 | Interfaz adaptada a la base nueva | Pendiente |
 | 5.7 | Despliegue | Pendiente |
+
+## Base de datos
+
+Se define **solo** con los archivos SQL de [`db/`](db/), que se aplican en orden:
+
+| Tabla | Qué guarda |
+|---|---|
+| `roles` | Roles de la aplicación |
+| `usuarios` | Nombre, email (único), hash de la contraseña y rol |
+| `tipos_documentos` | Solo 3 registros: FC (factura electrónica), CI (control interno), GD (guía de despacho) |
+| `documentos_procesados` | Una fila por documento: RUT del proveedor, folio, fecha, firma, neto, IVA, impuestos (otros impuestos + exento), total, observaciones (`LEGIBLE`, `NO_LEGIBLE`, `DESCUADRE`), `requiere_revision` (se calcula sola), tipo e imagen original |
+
+- Los documentos desconocidos (boletas, notas de crédito…) se descartan: no se guardan.
+- El mismo documento (tipo, RUT y folio) no se guarda dos veces; no aplica al RUT ilegible `1-9`.
+- Todo el sistema es del proyecto Oxxo: no hay tabla de proyectos.
+
+```bash
+python -m app.db.schema               # crea las tablas si la base está vacía
+python -m app.db.schema ../db/005_x.sql   # aplica un archivo nuevo a una base existente
+```
 
 ## Estructura
 
 ```
 hackaton_blinka/
+├── db/                       # Definición de la base: 001_..., 002_... (en orden)
 ├── docs/                     # Diseño y despliegue
 ├── backend/
-│   ├── alembic/versions/     # Migraciones (0008: esquema actual)
 │   ├── app/
 │   │   ├── main.py           # FastAPI
 │   │   ├── core/config.py    # Configuración (.env)
-│   │   ├── models/           # Tablas: lotes, archivos, páginas, documentos, procesamientos…
+│   │   ├── models.py         # Las 4 tablas (para leer y escribir; no las crea)
+│   │   ├── db/schema.py      # Aplica db/*.sql
 │   │   ├── ai/client.py      # OpenRouter: reintentos, JSON estricto y caché de respuestas
-│   │   ├── pipeline/         # intake, preprocess, segmenter (IA), grouper, extractor (IA),
-│   │   │                     # normalize, validate, orchestrator
+│   │   ├── pipeline/         # preprocess, segmenter (IA), grouper, extractor (IA), normalize,
+│   │   │                     # validate, process (guarda la fila), jobs (avance en memoria)
 │   │   ├── storage.py        # Almacenamiento de archivos
-│   │   ├── schemas.py        # DTOs de la API
-│   │   └── api/              # submissions, documents, files
+│   │   └── api/              # trabajos, documentos
 │   └── tests/
-└── frontend/                 # React + Vite + Tailwind: lotes, bandeja de documentos y detalle
+└── frontend/                 # React + Vite + Tailwind (pendiente de adaptar a la API nueva)
 ```
 
 ## Puesta en marcha
@@ -49,46 +68,30 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate          # Windows  (Linux/Mac: source .venv/bin/activate)
 pip install -r requirements-dev.txt
-alembic upgrade head
+python -m app.db.schema
 uvicorn app.main:app --reload    # http://localhost:8000/docs
 ```
-
-En otra terminal:
-
-```bash
-cd frontend
-npm install
-npm run dev                      # http://localhost:5173
-```
-
-**Interfaz:** *Lotes* (subir imágenes o PDF y ver el progreso de los agentes), *Documentos*
-(bandeja con totales por estado, filtros por estado y tipo y búsqueda por RUT o número) y el
-detalle de cada documento (imagen con la zona marcada, estados, campos con su texto original,
-validación de montos, alertas, pasos y reproceso).
 
 ## API
 
 | Método | Ruta | Qué hace |
 |---|---|---|
-| POST | `/submissions` | Sube un lote (`files`: una o varias imágenes o PDF). Responde al instante y procesa en segundo plano |
-| GET | `/submissions` | Lotes recientes con número de archivos y páginas |
-| GET | `/submissions/{id}` | Estado del lote, sus archivos, páginas (con su clasificación) y documentos detectados |
-| POST | `/submissions/{id}/process` | Reprocesa: retoma lo pendiente y reintenta lo fallido |
-| POST | `/submissions/{id}/files/{file_id}/reclassify` | Vuelve a clasificar un archivo desde cero (sus documentos se crean de nuevo) |
-| GET | `/documents` | Bandeja: resultado vigente de cada documento (`status`, `doc_type`, `q`) |
-| GET | `/documents/stats` | Totales por estado y por tipo |
-| GET | `/documents/{id}` | Documento: datos normalizados, estado y texto original de cada campo, alertas, pasos e historial |
-| POST | `/documents/{id}/reprocess` | Vuelve a extraer y validar; el resultado actual sigue vigente hasta que el nuevo termine bien |
-| GET | `/files/{id}` | Archivo original |
-| GET | `/pages/{id}/image` | Imagen de una página (lo que ve la IA) |
-| GET | `/regions/{id}/crop` | Recorte de un documento que comparte página con otros |
+| POST | `/trabajos` | Sube imágenes o PDF (`files`). Responde al instante con el trabajo y procesa en segundo plano, de a un trabajo por vez |
+| GET | `/trabajos` | Trabajos recientes (desde que arrancó el servidor) |
+| GET | `/trabajos/{id}` | Avance: estado de cada archivo y qué pasó con cada documento (guardado, descartado, duplicado o error) |
+| GET | `/documentos` | Documentos, los más recientes primero. Filtros: `tipo`, `observaciones`, `requiere_revision`, `q` (RUT o folio), `limite`, `desde` |
+| GET | `/documentos/resumen` | Totales por observaciones y por tipo, y cuántos requieren revisión |
+| GET | `/documentos/{id}` | Un documento |
+| GET | `/documentos/{id}/imagen` | El archivo original del que salió |
+| GET | `/tipos-documentos` | FC, CI y GD |
 
-Un archivo repetido (mismo contenido) no se guarda dos veces: el lote lo reutiliza y lo avisa.
+El avance de los trabajos vive en memoria: si el servidor se reinicia se pierde, pero los documentos
+ya guardados quedan en la base. Si se agota la cuota de la IA el trabajo se detiene y los archivos
+restantes quedan como omitidos; al volver a subirlos, la caché evita repetir llamadas y los ya
+guardados se informan como duplicados.
 
 **Caché de la IA:** cada respuesta del modelo se guarda en `backend/.ai_cache/` (excluida de git).
 Una llamada idéntica (misma imagen, mismas instrucciones, mismo modelo) no vuelve a gastar cuota.
-Si se agota la cuota o la clave es rechazada, el lote se detiene; `POST /submissions/{id}/process`
-lo retoma sin repetir lo ya clasificado.
 
 ## Evaluación con muestras reales
 
@@ -101,20 +104,19 @@ python -m app.evaluation.run --limite 10     # como mucho 10 imágenes nuevas
 python -m app.evaluation.run --solo-informe  # solo compara, sin llamar a la IA
 ```
 
-- Usa una base aparte (`<tu base>_eval_docs`) y `backend/storage_eval/`: no toca tus datos.
+- Usa una base aparte (`<tu base>_evaluacion`, con las mismas tablas) y `backend/storage_eval/`: no toca tus datos.
 - Si se agota la cuota se detiene; al volver a ejecutarlo retoma donde quedó (la caché evita repetir llamadas).
-- `muestras/respuestas.json`: las respuestas correctas. Cada imagen nueva se agrega prellenada con lo
-  que leyó el sistema y `"revisado": false`; se corrige a mano y se marca `"revisado": true`. Un valor
-  `null` significa que el documento no permite obtenerlo (ausente o ilegible).
-- `muestras/resultados/informe.md`: clasificación, estado, firma y, por campo, correctos, omitidos e
-  **inventados** (un valor distinto del correcto: el error grave).
+- `muestras/respuestas.json`: las respuestas correctas, con otros impuestos y exento por separado; al
+  comparar se suman en `impuestos`. Un valor `null` significa que el documento no permite obtenerlo.
+- `muestras/resultados/informe.md`: clasificación, observaciones, firma y, por campo, correctos,
+  omitidos e **inventados** (un valor distinto del correcto: el error grave).
 
 ## Tests
 
 ```bash
 cd backend
-pytest                                         # sin base: solo preprocesador y almacenamiento
-TEST_DATABASE_URL=postgresql+psycopg://…/test pytest   # todos (usa una base de pruebas vacía)
+pytest                                         # sin base: lectura, normalizador y validador
+TEST_DATABASE_URL=postgresql+psycopg://…/test pytest   # todos (la base de pruebas se crea con db/*.sql)
 ```
 
 Los tests usan documentos **sintéticos**. Las muestras reales van en `muestras/` (excluida de git).

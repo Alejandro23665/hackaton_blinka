@@ -18,8 +18,9 @@ normal del contenedor se borra en cada despliegue.
 | `OPENROUTER_MODEL` | No | Por defecto `nvidia/nemotron-3.5-super-vl:free` |
 | `TOTAL_TOLERANCE_CLP` | No | Diferencia permitida en la suma de montos (por defecto `0`) |
 
-`PORT` lo asigna la plataforma. Las migraciones (`alembic upgrade head`) se ejecutan solas en
-cada arranque.
+`PORT` lo asigna la plataforma. Al arrancar, si la base está vacía, se crean las tablas con los
+archivos `db/*.sql` (`python -m app.db.schema`). Un archivo SQL nuevo se aplica a mano en una base
+que ya existe.
 
 ## Railway
 

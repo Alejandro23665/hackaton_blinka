@@ -6,7 +6,6 @@
   es mejor separar de más que mezclar dos facturas en una.
 - Cada región desconocida es su propio documento.
 """
-import uuid
 from dataclasses import dataclass, field
 
 from app.pipeline.segmenter import PageAnalysis, clean_region, normalize_number, verify_type
@@ -14,7 +13,7 @@ from app.pipeline.segmenter import PageAnalysis, clean_region, normalize_number,
 
 @dataclass
 class GroupedRegion:
-    page_id: uuid.UUID
+    page_id: int  # número de la página en el archivo
     index_on_page: int
     bbox: dict | None
     position_hint: str | None
@@ -39,8 +38,8 @@ def _continues(document: GroupedDocument | None, doc_type: str, number: str | No
     return previous is None or current is None or previous == current
 
 
-def group_pages(pages: list[tuple[uuid.UUID, PageAnalysis]]) -> list[GroupedDocument]:
-    """`pages`: las páginas de UN archivo, en orden, con la respuesta del segmentador."""
+def group_pages(pages: list[tuple[int, PageAnalysis]]) -> list[GroupedDocument]:
+    """`pages`: las páginas de UN archivo, en orden: (número de página, respuesta del segmentador)."""
     documents: list[GroupedDocument] = []
     last: GroupedDocument | None = None  # último documento de la página anterior
 

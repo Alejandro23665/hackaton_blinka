@@ -21,6 +21,8 @@ COPY backend/requirements.txt ./
 RUN pip install -r requirements.txt
 
 COPY backend/ ./
+# Definición de la base (archivos SQL): app/db/schema.py los busca en ../db
+COPY db/ /app/db/
 COPY --from=frontend /app/frontend/dist /app/frontend/dist
 
 # Usuario sin privilegios. STORAGE_DIR debe apuntar a un volumen persistente (docs/04-despliegue.md)
@@ -29,5 +31,5 @@ USER blinka
 
 EXPOSE 8000
 # Sin DATABASE_URL la app usaría el valor de desarrollo (localhost) y fallaría con un traceback
-# confuso: se avisa con un mensaje claro. Después, migraciones (idempotentes) y servidor.
-CMD ["sh", "-c", "if [ -z \"$DATABASE_URL\" ]; then echo 'ERROR: falta la variable DATABASE_URL. En Railway o Render, conectala a la base Postgres del proyecto (ver docs/04-despliegue.md).' >&2; exit 1; fi; alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
+# confuso: se avisa con un mensaje claro. Después, tablas (solo si la base está vacía) y servidor.
+CMD ["sh", "-c", "if [ -z \"$DATABASE_URL\" ]; then echo 'ERROR: falta la variable DATABASE_URL. En Railway o Render, conectala a la base Postgres del proyecto (ver docs/04-despliegue.md).' >&2; exit 1; fi; python -m app.db.schema && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]

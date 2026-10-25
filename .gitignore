@@ -11,3 +11,4 @@ backend/storage_eval/
 backend/.ai_cache/
 # Muestras reales y sus respuestas correctas para evaluar (nunca van a git)
 muestras/
+respaldos/

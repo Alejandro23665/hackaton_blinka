@@ -11,7 +11,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from app.core.config import settings
-from app.models.enums import SUBSTITUTE_RUT
+from app.pipeline.fields import SUBSTITUTE_RUT
 
 
 @dataclass

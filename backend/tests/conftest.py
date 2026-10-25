@@ -3,10 +3,10 @@ import re
 
 import pytest
 from sqlalchemy import text
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, create_engine
 
-import app.models  # noqa: F401
 from app.core.config import settings
+from app.db import schema
 from tests.factories import extraction, unknown_page
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
@@ -78,20 +78,22 @@ def fake_ai(monkeypatch):
 
 @pytest.fixture(scope="session")
 def engine():
+    """La base de pruebas se crea con los mismos archivos db/*.sql que la real."""
     if not TEST_DATABASE_URL:
         pytest.skip("Define TEST_DATABASE_URL (una BD Postgres de pruebas) para los tests con base de datos")
     engine = create_engine(TEST_DATABASE_URL)
-    SQLModel.metadata.drop_all(engine)
-    SQLModel.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE; CREATE SCHEMA public"))
+    schema.apply(TEST_DATABASE_URL, schema.sql_files())
     yield engine
-    SQLModel.metadata.drop_all(engine)
+    engine.dispose()
 
 
 @pytest.fixture
 def clean_db(engine):
-    tables = ", ".join(t.name for t in SQLModel.metadata.sorted_tables)
+    # tipos_documentos no se vacía: sus 3 registros vienen de los archivos SQL
     with engine.begin() as conn:
-        conn.execute(text(f"TRUNCATE {tables} CASCADE"))
+        conn.execute(text("TRUNCATE documentos_procesados, usuarios, roles RESTART IDENTITY CASCADE"))
     return engine
 
 
@@ -105,7 +107,7 @@ def session(clean_db):
 def client(clean_db):
     from fastapi.testclient import TestClient
 
-    from app.db.session import get_session
+    from app.db.session import get_engine, get_session
     from app.main import app
 
     def override_session():
@@ -113,6 +115,7 @@ def client(clean_db):
             yield session
 
     app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_engine] = lambda: clean_db
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

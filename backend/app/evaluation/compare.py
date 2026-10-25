@@ -6,12 +6,38 @@ ilegible). Para cada campo se cuenta:
 - inventado: el sistema dio un valor distinto del correcto, o un valor donde no lo hay. Es el error
   grave: un dato falso que parece bueno;
 - omitido: el sistema no dio valor donde sí lo hay (va a revisión humana: es un error seguro).
+
+Las respuestas (muestras/respuestas.json) describen cada documento con detalle (tipo completo, otros
+impuestos y exento por separado, estado PROCESADO/DESCONOCIDO...). Antes de comparar se pasan al
+formato de documentos_procesados con `as_stored`.
 """
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-FIELDS = ("rut", "numero", "fecha", "neto", "iva", "otros_impuestos", "exento", "total")
-AMOUNTS = {"neto", "iva", "otros_impuestos", "exento", "total"}
+FIELDS = ("rut", "numero", "fecha", "neto", "iva", "impuestos", "total")
+AMOUNTS = {"neto", "iva", "impuestos", "total"}
+TYPE_CODES = {"FACTURA_ELECTRONICA": "FC", "CONTROL_INTERNO": "CI", "GUIA_DESPACHO": "GD"}
+OBSERVATIONS = {"PROCESADO": "LEGIBLE", "NO_LEGIBLE": "NO_LEGIBLE", "DESCUADRE": "DESCUADRE"}
+
+
+def as_stored(answer: dict) -> dict | None:
+    """Una respuesta tal como la guardaría el sistema. None si es desconocido (se descarta)."""
+    if answer["tipo"] not in TYPE_CODES:
+        return None
+    other, exempt = answer.get("otros_impuestos"), answer.get("exento")
+    return {
+        "tipo": TYPE_CODES[answer["tipo"]],
+        "estado": OBSERVATIONS[answer["estado"]],
+        "rut": answer.get("rut"),
+        "numero": answer.get("numero"),
+        "fecha": answer.get("fecha"),
+        "neto": answer.get("neto"),
+        "iva": answer.get("iva"),
+        # El exento va sumado con los otros impuestos
+        "impuestos": None if other is None and exempt is None else (other or 0) + (exempt or 0),
+        "total": answer.get("total"),
+        "firma": answer.get("firma"),
+    }
 
 
 def _same(name: str, expected, actual) -> bool:
@@ -84,11 +110,11 @@ def compare(expected_images: list[dict], system: dict[str, dict]) -> Totals:
         name = image["archivo"]
         found = system.get(name)
         totals.images += 1
-        expected_docs = image.get("documentos", [])
-        totals.documents_expected += len(expected_docs)
+        expected_docs = [doc for doc in map(as_stored, image.get("documentos", [])) if doc is not None]
         if found is None:
             totals.errors.append({"archivo": name, "error": "el sistema aún no lo procesó"})
             continue
+        totals.documents_expected += len(expected_docs)
         actual_docs = found.get("documentos", [])
         totals.documents_found += len(actual_docs)
         if len(actual_docs) != len(expected_docs):
@@ -104,8 +130,6 @@ def compare(expected_images: list[dict], system: dict[str, dict]) -> Totals:
                 continue  # con otro tipo, los campos no son comparables
             totals.state_total += 1
             totals.state_correct += exp.get("estado") == act.get("estado")
-            if exp["tipo"] == "DESCONOCIDO":
-                continue
             if exp.get("firma") is not None:
                 totals.signature_total += 1
                 totals.signature_correct += exp["firma"] == act.get("firma")

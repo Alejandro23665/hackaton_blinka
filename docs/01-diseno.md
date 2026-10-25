@@ -1,11 +1,14 @@
-# Diseño aprobado (fases 1 a 4)
+# Diseño
+
+La lectura (fases 1 a 4) se mantiene. La base de datos se rehízo desde cero (R1): ver
+[Base de datos](#base-de-datos).
 
 ## Qué hace el sistema
 
-Recibe **lotes** (una o varias imágenes, o PDF de varias páginas) con documentos mezclados,
+Recibe una o varias imágenes, o PDF de varias páginas, con documentos mezclados (proyecto Oxxo);
 separa cada documento, lo **clasifica** (guía de despacho, control interno, factura electrónica o
-desconocido), **extrae** sus campos, los **normaliza**, **valida** los montos y guarda todo con
-trazabilidad.
+desconocido), **extrae** sus campos, los **normaliza**, **valida** los montos y guarda una fila por
+documento en `documentos_procesados`. Los desconocidos se descartan.
 
 Principio central: **la IA lee, el código decide.** La IA transcribe lo que ve y con qué seguridad;
 convertir, sumar, validar y asignar estados lo hace código convencional, probado con tests.
@@ -13,12 +16,12 @@ convertir, sumar, validar y asignar estados lo hace código convencional, probad
 ## Flujo
 
 ```
-Lote ─► Recepción (originales + sha256) ─► Preprocesador ─► páginas
+Archivos ─► Recepción (originales + sha256) ─► Preprocesador ─► páginas
      ─► [IA] Segmentador-clasificador (por página) ─► regiones con tipo y evidencia
      ─► Agrupador (código) ─► documentos
      ─► [IA] Extractor (por documento admitido) ─► texto leído por campo + estado + confianza
      ─► [IA] Segunda lectura independiente ─► los campos que no coinciden quedan ILEGIBLE
-     ─► Normalizador (código) ─► Validador (código) ─► estados y alertas ─► una transacción
+     ─► Normalizador (código) ─► Validador (código) ─► una fila en documentos_procesados
 ```
 
 ## Reglas
@@ -73,54 +76,48 @@ segunda lectura, solo es `true` si ambas ven la firma; si no coinciden queda `fa
 `FIRMA_DUDOSA`. Lo escrito a mano nunca se usa como RUT ni fecha del documento. La firma no cambia el
 estado general. En los desconocidos queda `NULL` (no se analiza).
 
-## Estados (dimensiones separadas)
+## Estados
 
-| Dimensión | Valores |
-|---|---|
-| Técnico | `EN_PROCESO` · `COMPLETADO` · `FALLIDO` |
-| Tipo | `GUIA_DESPACHO` · `CONTROL_INTERNO` · `FACTURA_ELECTRONICA` · `DESCONOCIDO` |
-| Extracción | `COMPLETA` · `INCOMPLETA` · `NO_APLICA` |
-| Validación | `CUADRA` · `DESCUADRE` · `INCOMPLETA` · `NO_APLICA` |
-| **General** (derivado) | `DESCONOCIDO` → `NO_LEGIBLE` → `DESCUADRE` → `PROCESADO` |
+El validador trabaja internamente con dimensiones separadas (extracción `COMPLETA`/`INCOMPLETA`,
+validación `CUADRA`/`DESCUADRE`/`INCOMPLETA`/`NO_APLICA`) y deriva un estado general
+`NO_LEGIBLE` → `DESCUADRE` → `PROCESADO`. Al guardar se convierte en `observaciones`:
 
-Los problemas secundarios quedan como alertas (`run_issues`): ninguno se pierde por el estado
-principal.
+| Estado del validador | `observaciones` | `requiere_revision` |
+|---|---|---|
+| `PROCESADO` | `LEGIBLE` | no |
+| `NO_LEGIBLE` | `NO_LEGIBLE` | sí |
+| `DESCUADRE` | `DESCUADRE` | sí |
+| `DESCONOCIDO` | no se guarda | — |
 
 Decisión: si un campo **opcional** es ilegible y los demás montos no alcanzan para comprobar la
-suma (validación `INCOMPLETA`), el estado general es `NO_LEGIBLE`, no `PROCESADO`: marcarlo procesado
-ocultaría que el total no se pudo verificar. Si los demás montos ya suman el total, el opcional solo
-puede ser 0 y el documento queda `PROCESADO`.
+suma, el documento es `NO_LEGIBLE`: marcarlo legible ocultaría que el total no se pudo verificar. Si
+los demás montos ya suman el total, el opcional solo puede ser 0 y el documento queda `LEGIBLE`.
 
-Alertas: `CAMPO_ILEGIBLE`, `CAMPO_OBLIGATORIO_AUSENTE`, `RUT_SUSTITUTO`, `DESCUADRE`,
-`VALIDACION_INCOMPLETA`, `OPCIONAL_DEDUCIDO`, `MONTOS_EN_CERO`, `IVA_NO_CORRESPONDE_19` (solo facturas electrónicas, ±1 peso),
-`POSIBLE_DUPLICADO` (mismo RUT real, tipo y número), `MONTO_CON_DECIMALES`, `LECTURA_INCONSISTENTE`, `FIRMA_DUDOSA`,
-`CLASIFICACION_SIN_EVIDENCIA`, `CLASIFICACION_DUDOSA`, `AGRUPACION_DUDOSA`, `BAJA_CALIDAD_IMAGEN`,
-`REGION_INVALIDA`.
+Las alertas detalladas del validador (campo ilegible, lectura inconsistente, firma dudosa…) no se
+guardan: la base solo registra el resultado.
 
 ## Base de datos
 
+Se define solo con los archivos SQL de `db/` (001, 002…), aplicados en orden. Cuatro tablas:
+
 | Tabla | Responsabilidad |
 |---|---|
-| `submissions` | El lote y su fecha de recepción |
-| `stored_files` | Original guardado una vez (sha256 único); los bytes en el almacenamiento |
-| `submission_files` | Qué archivos trae cada lote |
-| `pages` | Cada página convertida en imagen |
-| `page_classifications` | Respuesta del segmentador por página (historial + actual) |
-| `documents` | El documento lógico |
-| `document_regions` | Un documento dentro de una página (zona o página completa) |
-| `processing_runs` | Cada procesamiento: datos normalizados, estados, diferencia; uno actual por documento |
-| `extracted_fields` | Por campo: estado, texto original, confianza, región |
-| `run_issues` | Alertas |
-| `run_steps` | Bitácora: modelo, duración, intentos, respuesta original de la IA |
+| `roles` | Roles de la aplicación |
+| `usuarios` | Nombre, email (único sin distinguir mayúsculas), hash de la contraseña (nunca en texto plano) y rol. Un rol con usuarios no se puede borrar |
+| `tipos_documentos` | Solo FC (factura electrónica), CI (control interno) y GD (guía de despacho) |
+| `documentos_procesados` | Una fila por documento: `rut_proveedor`, `folio` (texto: conserva ceros), `fecha`, `firma`, `impuestos` (otros impuestos + exento), `total_neto`, `iva`, `total` (pesos, enteros, nunca negativos), `observaciones`, `requiere_revision` (calculada por la base), `id_tipo_documento` e `imagen` (archivo original) |
 
-Las reglas críticas están además como restricciones `CHECK` en la base (por ejemplo, un
-`DESCONOCIDO` no puede tener montos y no hay `DESCUADRE` sin diferencia).
+Reglas que hace cumplir la propia base:
+- `observaciones` solo admite `LEGIBLE`, `NO_LEGIBLE` y `DESCUADRE`; `requiere_revision` es
+  `observaciones <> 'LEGIBLE'` y nadie la puede escribir.
+- El tipo es obligatorio: un documento desconocido no se puede guardar.
+- Un documento (tipo, RUT y folio) no se guarda dos veces, salvo con RUT ilegible `1-9`.
 
-Reprocesar crea un procesamiento nuevo sobre las mismas imágenes; si falla, el anterior sigue
-siendo el actual.
+Montos: `total_neto + iva + impuestos = total`. Si falta un monto obligatorio, todos quedan en 0 y
+el documento `NO_LEGIBLE`; una guía sin valorizar deja sus montos vacíos y es `LEGIBLE`.
 
 ## Tecnología
 
-FastAPI · PostgreSQL + SQLModel + Alembic · OpenRouter (modelo configurable; hoy
+FastAPI · PostgreSQL (definida en `db/*.sql`) + SQLModel · OpenRouter (modelo configurable; hoy
 `nvidia/nemotron-3.5-super-vl:free`) · pypdfium2 + Pillow · React + Vite + Tailwind · Docker en
 Railway con volumen para los archivos.

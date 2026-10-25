@@ -22,10 +22,10 @@ def test_access_password_protects_everything_but_health(monkeypatch):
     monkeypatch.setattr(settings, "ACCESS_PASSWORD", "secreto")
     client = TestClient(app)
     assert client.get("/health").status_code == 200
-    denied = client.get("/submissions")
+    denied = client.get("/documentos")
     assert denied.status_code == 401 and denied.headers["www-authenticate"].startswith("Basic")
-    assert client.get("/submissions", headers=_basic("blinka", "otra")).status_code == 401
-    assert client.get("/submissions", headers={"Authorization": "Basic !!!"}).status_code == 401
+    assert client.get("/documentos", headers=_basic("blinka", "otra")).status_code == 401
+    assert client.get("/documentos", headers={"Authorization": "Basic !!!"}).status_code == 401
 
 
 def test_no_password_means_open_access(monkeypatch):
