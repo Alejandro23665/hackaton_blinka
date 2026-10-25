@@ -96,11 +96,39 @@ def test_missing_amounts_never_produce_a_mismatch():
     assert "VALIDACION_INCOMPLETA" in _codes(result)
 
 
-def test_illegible_optional_field_blocks_the_sum_check():
-    result = _case(OTHER_TAXES_AMOUNT=ILLEGIBLE)
+def test_illegible_optional_field_is_zero_when_the_rest_adds_up():
+    # 100.000 + 19.000 ya es el total: el exento tapado solo puede ser 0
+    result = _case(EXEMPT_AMOUNT=ILLEGIBLE)
+    assert (result.extraction_status, result.validation_status, result.overall_status) == (
+        "COMPLETA", "CUADRA", "PROCESADO"
+    )
+    assert result.amounts["EXEMPT_AMOUNT"] == ZERO and result.amounts["OTHER_TAXES_AMOUNT"] is None
+    assert _codes(result) == ["OPCIONAL_DEDUCIDO"]
+
+
+def test_illegible_optional_field_blocks_the_sum_check_when_the_rest_does_not_add_up():
+    result = _case(OTHER_TAXES_AMOUNT=ILLEGIBLE, TOTAL_AMOUNT=("LEIDO", Decimal(121000)))
     assert result.extraction_status == "COMPLETA"
     assert (result.validation_status, result.overall_status) == ("INCOMPLETA", "NO_LEGIBLE")
+    assert result.amounts["OTHER_TAXES_AMOUNT"] is None
     assert "otros impuestos" in result.review_reason
+
+
+def test_missing_required_amount_sets_every_amount_to_zero():
+    result = _case(NET_AMOUNT=ILLEGIBLE, EXEMPT_AMOUNT=("LEIDO", Decimal(500)))
+    assert result.overall_status == "NO_LEGIBLE"
+    assert set(result.amounts.values()) == {ZERO}
+    assert "MONTOS_EN_CERO" in _codes(result)
+
+
+def test_absent_vat_also_sets_every_amount_to_zero():
+    result = _case(VAT_AMOUNT=ABSENT, TOTAL_AMOUNT=("LEIDO", Decimal(100000)))
+    assert result.overall_status == "NO_LEGIBLE" and set(result.amounts.values()) == {ZERO}
+
+
+def test_other_illegible_fields_keep_the_amounts():
+    result = _case(ISSUE_DATE=ILLEGIBLE)
+    assert result.overall_status == "NO_LEGIBLE" and result.amounts["TOTAL_AMOUNT"] == Decimal(119000)
 
 
 def test_explicit_zero_is_a_value():
@@ -121,6 +149,8 @@ def test_unvalued_dispatch_guide_is_processed_without_sum():
     assert (result.extraction_status, result.validation_status, result.overall_status) == (
         "COMPLETA", "NO_APLICA", "PROCESADO"
     )
+    # Guía sin valorizar: los montos siguen sin valor, no en 0
+    assert set(result.amounts.values()) == {None}
 
 
 def test_valued_dispatch_guide_requires_net_and_total():

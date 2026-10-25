@@ -24,6 +24,40 @@ def _same(name: str, expected, actual) -> bool:
     return str(expected).strip().upper() == str(actual).strip().upper()
 
 
+def _digits(value) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isdigit()).lstrip("0")
+
+
+def pair_documents(expected: list[dict], actual: list[dict]) -> list[tuple[dict | None, dict | None]]:
+    """Empareja los documentos de una imagen: primero por tipo y número, luego por tipo y, al final,
+    en orden. Así, con dos documentos en una foto, no importa en qué orden los encontró el sistema."""
+    remaining = list(actual)
+    pairs: list[tuple[dict | None, dict | None]] = []
+    pending: list[dict] = []
+    for exp in expected:
+        match = next(
+            (a for a in remaining if a["tipo"] == exp["tipo"] and _digits(a.get("numero")) and
+             _digits(a.get("numero")) == _digits(exp.get("numero"))),
+            None,
+        )
+        if match is None:
+            pending.append(exp)
+            continue
+        remaining.remove(match)
+        pairs.append((exp, match))
+    still: list[dict] = []
+    for exp in pending:
+        match = next((a for a in remaining if a["tipo"] == exp["tipo"]), None)
+        if match is None:
+            still.append(exp)
+            continue
+        remaining.remove(match)
+        pairs.append((exp, match))
+    for index in range(max(len(still), len(remaining))):
+        pairs.append((still[index] if index < len(still) else None, remaining[index] if index < len(remaining) else None))
+    return pairs
+
+
 @dataclass
 class Totals:
     images: int = 0
@@ -59,10 +93,8 @@ def compare(expected_images: list[dict], system: dict[str, dict]) -> Totals:
         totals.documents_found += len(actual_docs)
         if len(actual_docs) != len(expected_docs):
             totals.images_with_count_mismatch.append(name)
-        # Se comparan en orden de aparición; los que sobran o faltan cuentan como error de tipo
-        for index in range(max(len(expected_docs), len(actual_docs))):
-            exp = expected_docs[index] if index < len(expected_docs) else None
-            act = actual_docs[index] if index < len(actual_docs) else None
+        # Los que sobran o faltan cuentan como error de clasificación
+        for index, (exp, act) in enumerate(pair_documents(expected_docs, actual_docs)):
             totals.type_total += 1
             if exp is None or act is None:
                 continue

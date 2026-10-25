@@ -201,3 +201,17 @@ def test_hidden_additional_tax_makes_the_document_not_legible(client, fake_ai):
     assert (run["overall_status"], run["validation_status"], run["other_taxes_amount"]) == ("NO_LEGIBLE", "INCOMPLETA", None)
     assert float(run["vat_amount"]) == 431  # el IVA sí se leyó
     assert run["document_number"] == "1352386"
+
+
+def test_illegible_net_stores_every_amount_as_zero(client, fake_ai):
+    fake_ai.pages = {1: INVOICE}
+    fake_ai.extractions = [extraction(NET_AMOUNT=reading("$ 1?0.000", status="ILEGIBLE", confidence=0.2))]
+    lot = _lot(client, ("neto_tapado.png", image_bytes(), "image/png"))
+    detail = _detail(client, lot["documents"][0]["id"])
+    run = detail["run"]
+    assert run["overall_status"] == "NO_LEGIBLE"
+    assert {float(run[c]) for c in ("net_amount", "vat_amount", "total_amount")} == {0}
+    assert "MONTOS_EN_CERO" in [i["code"] for i in detail["issues"]]
+    # Lo leído queda en el detalle de campos
+    net = next(f for f in detail["fields"] if f["field_name"] == "NET_AMOUNT")
+    assert (net["status"], net["raw_text"]) == ("ILEGIBLE", "$ 1?0.000")

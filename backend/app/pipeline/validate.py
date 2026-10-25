@@ -2,6 +2,9 @@
 
 - Campos obligatorios según el tipo de documento.
 - Suma: neto + IVA + otros impuestos + exento = total, con la tolerancia configurada.
+- Un opcional ilegible (otros impuestos, exento) vale 0 si los demás montos ya cuadran con el total.
+- Si falta un monto obligatorio (neto, IVA o total), todos los montos quedan en 0 y el documento,
+  NO_LEGIBLE: no se guardan montos sueltos de un documento que no se pudo leer entero.
 - Alertas que no cambian el estado (IVA distinto del 19 %).
 - Estado general derivado: DESCONOCIDO → NO_LEGIBLE → DESCUADRE → PROCESADO.
 
@@ -13,6 +16,7 @@ from decimal import ROUND_HALF_UP, Decimal
 # El IVA es obligatorio; los demás impuestos (IABA, ILA…) y el exento son opcionales
 REQUIRED_FIELDS = ("PROVIDER_RUT", "DOCUMENT_NUMBER", "ISSUE_DATE", "NET_AMOUNT", "VAT_AMOUNT", "TOTAL_AMOUNT")
 AMOUNT_FIELDS = ("NET_AMOUNT", "VAT_AMOUNT", "OTHER_TAXES_AMOUNT", "EXEMPT_AMOUNT", "TOTAL_AMOUNT")
+REQUIRED_AMOUNTS = ("NET_AMOUNT", "VAT_AMOUNT", "TOTAL_AMOUNT")
 OPTIONAL_AMOUNTS = ("OTHER_TAXES_AMOUNT", "EXEMPT_AMOUNT")
 VAT_RATE = Decimal("0.19")
 # Diferencia admitida entre el IVA leído y el 19 % del neto (redondeo del documento)
@@ -59,6 +63,8 @@ class Validation:
     difference: Decimal | None
     review_reason: str | None
     issues: list[dict] = field(default_factory=list)
+    # Montos que se guardan: los leídos, con los opcionales deducidos o todos en 0 (ver arriba)
+    amounts: dict[str, Decimal | None] = field(default_factory=dict)
 
 
 def validate(
@@ -90,13 +96,32 @@ def validate(
         reasons.append("No se pudo recuperar: " + ", ".join(LABELS[name] for name in missing))
 
     # 2. Suma de montos
-    net, vat, other_taxes, exempt, total = (values[name] for name in AMOUNT_FIELDS)
+    amounts = {name: values[name] for name in AMOUNT_FIELDS}
     calculated = difference = None
+    missing_amounts: list[str] = []
     if is_unvalued_guide(doc_type, statuses):
         validation_status = "NO_APLICA"
     else:
-        unknown = [name for name in ("NET_AMOUNT", "VAT_AMOUNT", "TOTAL_AMOUNT") if values[name] is None]
-        unknown += [name for name in OPTIONAL_AMOUNTS if statuses[name] == "ILEGIBLE"]
+        missing_amounts = [name for name in REQUIRED_AMOUNTS if values[name] is None]
+        unreadable = [name for name in OPTIONAL_AMOUNTS if statuses[name] == "ILEGIBLE"]
+        if unreadable and not missing_amounts:
+            # Si los demás montos ya suman el total, el opcional ilegible no puede ser otro que 0
+            known = sum((amounts[name] for name in OPTIONAL_AMOUNTS if amounts[name] is not None), Decimal(0))
+            if abs(amounts["TOTAL_AMOUNT"] - amounts["NET_AMOUNT"] - amounts["VAT_AMOUNT"] - known) <= tolerance:
+                for name in unreadable:
+                    amounts[name] = Decimal(0)
+                    issues.append(
+                        {
+                            "code": "OPCIONAL_DEDUCIDO",
+                            "severity": "INFO",
+                            "field_name": name,
+                            "message": f"El {LABELS[name]} no se lee, pero los demás montos ya suman el total: "
+                            "se registró en $ 0.",
+                            "details": None,
+                        }
+                    )
+                unreadable = []
+        unknown = missing_amounts + unreadable
         if unknown:
             validation_status = "INCOMPLETA"
             message = "No se pudo comprobar la suma: falta " + ", ".join(LABELS[name] for name in unknown)
@@ -111,6 +136,7 @@ def validate(
                 }
             )
         else:
+            net, vat, other_taxes, exempt, total = (amounts[name] for name in AMOUNT_FIELDS)
             # Un opcional ausente no suma (no es lo mismo que 0, pero no aporta al total)
             calculated = net + vat + (other_taxes or Decimal(0)) + (exempt or Decimal(0))
             difference = total - calculated
@@ -138,6 +164,7 @@ def validate(
                 validation_status = "CUADRA"
 
     # 3. Alertas que no cambian el estado
+    net, vat = values["NET_AMOUNT"], values["VAT_AMOUNT"]
     if doc_type == "FACTURA_ELECTRONICA" and net is not None and vat is not None:
         expected = (net * VAT_RATE).quantize(Decimal(1), rounding=ROUND_HALF_UP)
         if abs(vat - expected) > VAT_TOLERANCE:
@@ -160,6 +187,20 @@ def validate(
     else:
         overall = "PROCESADO"
 
+    # 5. Sin un monto obligatorio, ningún monto del documento es confiable: todos en 0
+    if missing_amounts:
+        amounts = {name: Decimal(0) for name in AMOUNT_FIELDS}
+        issues.append(
+            {
+                "code": "MONTOS_EN_CERO",
+                "severity": "INFO",
+                "field_name": None,
+                "message": "Falta un monto obligatorio: todos los montos se registraron en $ 0. "
+                "Lo leído de cada campo queda en el detalle de campos.",
+                "details": {"fields": missing_amounts},
+            }
+        )
+
     return Validation(
         extraction_status=extraction_status,
         validation_status=validation_status,
@@ -168,4 +209,5 @@ def validate(
         difference=difference,
         review_reason=". ".join(reasons) + "." if reasons else None,
         issues=issues,
+        amounts=amounts,
     )

@@ -29,3 +29,11 @@ def test_document_count_and_type_mismatches():
     assert totals.images_with_count_mismatch == ["2.png"]
     assert (totals.type_correct, totals.type_total) == (0, 2)
     assert totals.invented == []  # con otro tipo, los campos no se comparan
+
+
+def test_documents_are_paired_by_type_and_number_not_by_order():
+    expected = [{"archivo": "57.png", "revisado": True, "documentos": [
+        _doc(tipo="GUIA_DESPACHO", numero="2501600"), _doc(numero="2501600")]}]
+    system = {"57.png": {"documentos": [_doc(numero="2.501.600"), _doc(tipo="GUIA_DESPACHO", numero="2501600")]}}
+    totals = compare(expected, system)
+    assert (totals.type_correct, totals.type_total) == (2, 2)

@@ -39,7 +39,7 @@ from app.pipeline.preprocess import PreprocessError, render_pages
 from app.pipeline.validate import required_fields, validate
 from app.storage import crop_key, get_storage, page_key
 
-PIPELINE_VERSION = "0.4"
+PIPELINE_VERSION = "0.5"
 # Alertas que vienen de la segmentación y se copian si un documento se vuelve a procesar
 SEGMENTATION_ISSUES = (
     "CLASIFICACION_SIN_EVIDENCIA",
@@ -528,6 +528,11 @@ def _validate_run(session: Session, run: ProcessingRun) -> bool:
             session.add(previous)
         session.flush()
 
+        run.net_amount = result.amounts["NET_AMOUNT"]
+        run.vat_amount = result.amounts["VAT_AMOUNT"]
+        run.other_taxes_amount = result.amounts["OTHER_TAXES_AMOUNT"]
+        run.exempt_amount = result.amounts["EXEMPT_AMOUNT"]
+        run.total_amount = result.amounts["TOTAL_AMOUNT"]
         run.extraction_status = result.extraction_status
         run.validation_status = result.validation_status
         run.overall_status = result.overall_status

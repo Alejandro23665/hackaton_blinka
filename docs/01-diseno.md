@@ -33,7 +33,11 @@ Lote ─► Recepción (originales + sha256) ─► Preprocesador ─► página
   seguridad). Ausente ≠ 0.
 - **RUT ilegible** (o con dígito verificador incorrecto): se guarda `1-9` con `rut_is_substitute`.
 - **Suma:** neto + IVA + otros impuestos + exento = total, con tolerancia `TOTAL_TOLERANCE_CLP` (0). Un
-  opcional ausente no suma; uno ilegible deja la validación `INCOMPLETA` (nunca `DESCUADRE`).
+  opcional ausente no suma. Uno ilegible se registra en 0 si los demás montos ya suman el total
+  (alerta `OPCIONAL_DEDUCIDO`); si no, deja la validación `INCOMPLETA` (nunca `DESCUADRE`).
+- **Monto obligatorio ilegible o ausente** (neto, IVA o total): todos los montos del documento se
+  guardan en 0 y queda `NO_LEGIBLE` (alerta `MONTOS_EN_CERO`). Lo leído de cada campo se conserva en
+  `extracted_fields`. No aplica a la guía sin valorizar, cuyos montos siguen sin valor.
 - **IVA y otros impuestos:** el extractor lee cada línea de impuesto por separado y el código las
   clasifica por su nombre: el **IVA** va a `vat_amount` (campo `VAT_AMOUNT`, obligatorio) y los demás
   (IABA 10 %, IABA 18 %, ILA VIN 20,5 %, ILA CER 20,5 %, ILA 31,5 %…) se suman en
@@ -82,12 +86,13 @@ estado general. En los desconocidos queda `NULL` (no se analiza).
 Los problemas secundarios quedan como alertas (`run_issues`): ninguno se pierde por el estado
 principal.
 
-Decisión: si un campo **opcional** es ilegible y por eso no se puede comprobar la suma
-(validación `INCOMPLETA`), el estado general es `NO_LEGIBLE`, no `PROCESADO`: marcarlo procesado
-ocultaría que el total no se pudo verificar.
+Decisión: si un campo **opcional** es ilegible y los demás montos no alcanzan para comprobar la
+suma (validación `INCOMPLETA`), el estado general es `NO_LEGIBLE`, no `PROCESADO`: marcarlo procesado
+ocultaría que el total no se pudo verificar. Si los demás montos ya suman el total, el opcional solo
+puede ser 0 y el documento queda `PROCESADO`.
 
 Alertas: `CAMPO_ILEGIBLE`, `CAMPO_OBLIGATORIO_AUSENTE`, `RUT_SUSTITUTO`, `DESCUADRE`,
-`VALIDACION_INCOMPLETA`, `IVA_NO_CORRESPONDE_19` (solo facturas electrónicas, ±1 peso),
+`VALIDACION_INCOMPLETA`, `OPCIONAL_DEDUCIDO`, `MONTOS_EN_CERO`, `IVA_NO_CORRESPONDE_19` (solo facturas electrónicas, ±1 peso),
 `POSIBLE_DUPLICADO` (mismo RUT real, tipo y número), `MONTO_CON_DECIMALES`, `LECTURA_INCONSISTENTE`, `FIRMA_DUDOSA`,
 `CLASIFICACION_SIN_EVIDENCIA`, `CLASIFICACION_DUDOSA`, `AGRUPACION_DUDOSA`, `BAJA_CALIDAD_IMAGEN`,
 `REGION_INVALIDA`.
