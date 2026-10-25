@@ -6,7 +6,7 @@ import { Button, Card, ErrorBox } from './ui'
 
 const ACCEPT = '.pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp'
 
-/** Subida de un lote: una o varias imágenes o PDF, arrastrando o eligiendo archivos. */
+/** Subida de una o varias imágenes o PDF, arrastrando o eligiendo archivos. */
 export default function UploadZone({ onUploaded }) {
   const inputId = useId()
   const [files, setFiles] = useState([])
@@ -26,9 +26,9 @@ export default function UploadZone({ onUploaded }) {
     setBusy(true)
     setError(null)
     try {
-      const lot = await api.submissions.upload(files)
+      const job = await api.jobs.create(files)
       setFiles([])
-      onUploaded(lot)
+      onUploaded(job)
     } catch (e) {
       setError(e.message)
     } finally {
@@ -37,7 +37,7 @@ export default function UploadZone({ onUploaded }) {
   }
 
   return (
-    <Card title="Nuevo lote" subtitle="Imágenes o PDF con guías de despacho, controles internos o facturas electrónicas">
+    <Card title="Subir documentos" subtitle="Imágenes o PDF con guías de despacho, controles internos o facturas electrónicas">
       <label
         htmlFor={inputId}
         onDragOver={(e) => {
@@ -96,7 +96,7 @@ export default function UploadZone({ onUploaded }) {
         <ErrorBox message={error} />
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-muted">
-            Los agentes separan cada documento, lo clasifican, leen sus datos y validan los montos.
+            Los agentes separan cada documento, lo clasifican, leen sus datos y validan los montos. Los desconocidos se descartan.
           </p>
           <Button icon="sparkles" disabled={!files.length || busy} onClick={upload}>
             {busy ? 'Subiendo…' : `Procesar ${files.length || ''} archivo${files.length === 1 ? '' : 's'}`}

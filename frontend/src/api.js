@@ -26,28 +26,20 @@ async function request(path, { method = 'GET', body, params } = {}) {
   return data
 }
 
-const fileUrl = (path) => new URL(path, BASE_URL).toString()
-
 export const api = {
   health: () => request('/health'),
-  submissions: {
-    list: () => request('/submissions'),
-    get: (id) => request(`/submissions/${id}`),
-    upload: (files) => {
+  jobs: {
+    list: () => request('/trabajos'),
+    create: (files) => {
       const form = new FormData()
       files.forEach((file) => form.append('files', file))
-      return request('/submissions', { method: 'POST', body: form })
+      return request('/trabajos', { method: 'POST', body: form })
     },
-    process: (id) => request(`/submissions/${id}/process`, { method: 'POST' }),
-    reclassify: (id, fileId) => request(`/submissions/${id}/files/${fileId}/reclassify`, { method: 'POST' }),
   },
   documents: {
-    list: (params) => request('/documents', { params }),
-    stats: () => request('/documents/stats'),
-    get: (id) => request(`/documents/${id}`),
-    reprocess: (id) => request(`/documents/${id}/reprocess`, { method: 'POST' }),
+    list: (params) => request('/documentos', { params }),
+    summary: () => request('/documentos/resumen'),
+    get: (id) => request(`/documentos/${id}`),
   },
-  fileUrl: (id) => fileUrl(`/files/${id}`),
-  pageImageUrl: (id) => fileUrl(`/pages/${id}/image`),
-  cropUrl: (id) => fileUrl(`/regions/${id}/crop`),
+  imageUrl: (id) => new URL(`/documentos/${id}/imagen`, BASE_URL).toString(),
 }

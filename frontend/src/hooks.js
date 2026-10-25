@@ -22,7 +22,7 @@ export function useLoad(loader, reloadKey) {
   return { ...state, reload }
 }
 
-/** Llama a reload() cada `ms` mientras `active` sea verdadero (por ejemplo, un lote en proceso). */
+/** Llama a reload() cada `ms` mientras `active` sea verdadero (por ejemplo, un trabajo en proceso). */
 export function usePolling(reload, active, ms = 3000) {
   useEffect(() => {
     if (!active) return
@@ -31,9 +31,9 @@ export function usePolling(reload, active, ms = 3000) {
   }, [reload, active, ms])
 }
 
-/** Ruta a partir del hash: #/lotes/<id> → { section: 'lotes', id }. Permite enlaces directos. */
+/** Ruta a partir del hash: #/documentos/<id> → { section: 'documentos', id }. Permite enlaces directos. */
 function parseHash() {
-  const [section = 'lotes', id = null] = window.location.hash.replace(/^#\/?/, '').split('/').filter(Boolean)
+  const [section = 'subir', id = null] = window.location.hash.replace(/^#\/?/, '').split('/').filter(Boolean)
   return { section, id }
 }
 

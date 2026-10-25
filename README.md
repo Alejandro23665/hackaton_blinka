@@ -14,7 +14,7 @@ Diseño en [docs/01-diseno.md](docs/01-diseno.md).
 | 5.1–5.4 | Lectura con IA: segmentar, clasificar, extraer (doble lectura), normalizar y validar | Hecha |
 | 5.5 | Evaluación con muestras reales | En curso (58 imágenes) |
 | R1 | Base de datos desde cero (4 tablas, `db/*.sql`) y backend adaptado | Hecha |
-| R2 | Interfaz adaptada a la base nueva | Pendiente |
+| R2 | Interfaz adaptada a la base nueva | Hecha |
 | 5.7 | Despliegue | Pendiente |
 
 ## Base de datos
@@ -55,7 +55,7 @@ hackaton_blinka/
 │   │   ├── storage.py        # Almacenamiento de archivos
 │   │   └── api/              # trabajos, documentos
 │   └── tests/
-└── frontend/                 # React + Vite + Tailwind (pendiente de adaptar a la API nueva)
+└── frontend/                 # React + Vite + Tailwind: Subir, Documentos y detalle
 ```
 
 ## Puesta en marcha
@@ -71,6 +71,19 @@ pip install -r requirements-dev.txt
 python -m app.db.schema
 uvicorn app.main:app --reload    # http://localhost:8000/docs
 ```
+
+En otra terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev                      # http://localhost:5173
+```
+
+**Interfaz:** *Subir* (imágenes o PDF y el avance de cada trabajo: documentos guardados,
+descartados, duplicados o con error), *Documentos* (totales, filtros por tipo, observaciones y
+"requieren revisión", búsqueda por RUT o folio) y el detalle de cada documento (archivo original con
+zoom, datos guardados y suma de montos).
 
 ## API
 

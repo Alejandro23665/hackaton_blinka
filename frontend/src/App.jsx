@@ -3,23 +3,22 @@ import Icon from './components/icons'
 import { href, useLoad, useRoute } from './hooks'
 import DocumentDetail from './views/DocumentDetail'
 import Documents from './views/Documents'
-import LotDetail from './views/LotDetail'
-import Lots from './views/Lots'
+import Upload from './views/Upload'
 
 const TABS = [
-  { section: 'lotes', label: 'Lotes', icon: 'layers' },
+  { section: 'subir', label: 'Subir', icon: 'upload' },
   { section: 'documentos', label: 'Documentos', icon: 'file' },
 ]
 
 function Logo() {
   return (
-    <a href={href('lotes')} className="flex items-center gap-2.5">
+    <a href={href('subir')} className="flex items-center gap-2.5">
       <span className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-brand-600 text-white shadow-control">
         <Icon name="file" size={18} strokeWidth={2} />
       </span>
       <span className="leading-tight">
         <span className="block text-[15px] font-semibold tracking-tight text-ink">Captura de documentos</span>
-        <span className="hidden text-[11px] text-subtle sm:block">Agentes de IA · guías, controles y facturas</span>
+        <span className="hidden text-[11px] text-subtle sm:block">Oxxo · guías, controles y facturas</span>
       </span>
     </a>
   )
@@ -41,7 +40,7 @@ function ApiStatus() {
 
 function View({ section, id }) {
   if (section === 'documentos') return id ? <DocumentDetail id={id} /> : <Documents />
-  return id ? <LotDetail id={id} /> : <Lots />
+  return <Upload />
 }
 
 export default function App() {
