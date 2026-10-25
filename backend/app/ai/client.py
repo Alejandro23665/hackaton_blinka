@@ -165,6 +165,9 @@ def call_json(
             "json_schema": {"name": schema_name, "strict": True, "schema": schema},
         },
     }
+    if settings.OPENROUTER_REASONING:
+        # Forma parte de la llamada: cambiarlo cambia también la clave de la caché
+        payload["reasoning"] = settings.OPENROUTER_REASONING
     cache_file = _cache_path(payload)
     if settings.AI_CACHE_ENABLED and cache_file.is_file():
         cached = json.loads(cache_file.read_text(encoding="utf-8"))

@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # Modelo de cada agente; vacío = OPENROUTER_MODEL
     SEGMENTER_MODEL: str | None = None
     EXTRACTOR_MODEL: str | None = None
+    # Razonamiento interno del modelo (parámetro "reasoning" de OpenRouter), por ejemplo
+    # {"effort": "low"} o {"enabled": false}. Vacío = lo que el modelo haga por defecto.
+    OPENROUTER_REASONING: dict | None = None
     # Segunda lectura independiente de cada documento: los campos en que no coincide quedan ILEGIBLE.
     # Detecta datos "adivinados" (la confianza que declara el modelo no lo hace). Duplica las llamadas.
     EXTRACTION_VERIFY: bool = True
