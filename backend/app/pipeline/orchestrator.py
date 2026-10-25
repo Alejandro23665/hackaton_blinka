@@ -237,7 +237,7 @@ def segment_file(session: Session, submission: Submission, stored: StoredFile) -
     return True
 
 
-def _file_documents(session: Session, stored: StoredFile) -> list[tuple[Document, list[DocumentRegion]]]:
+def file_documents(session: Session, stored: StoredFile) -> list[tuple[Document, list[DocumentRegion]]]:
     """Documentos que empiezan en las páginas del archivo, en orden, con sus regiones ordenadas."""
     pages = {p.id: p for p in _file_pages(session, stored)}
     if not pages:
@@ -556,7 +556,7 @@ def _validate_run(session: Session, run: ProcessingRun) -> bool:
 
 def process_file(session: Session, stored: StoredFile) -> bool:
     complete = True
-    for document, regions in _file_documents(session, stored):
+    for document, regions in file_documents(session, stored):
         complete = process_document(session, document, regions) and complete
     return complete
 

@@ -6,6 +6,7 @@ node_modules/
 dist/
 # Documentos subidos e imágenes de páginas (datos reales, no van a git)
 backend/storage/
+backend/storage_eval/
 # Respuestas de la IA guardadas (pueden contener datos de documentos reales)
 backend/.ai_cache/
 # Muestras reales y sus respuestas correctas para evaluar (nunca van a git)

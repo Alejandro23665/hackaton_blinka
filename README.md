@@ -14,7 +14,7 @@ trazabilidad. Diseño completo en [docs/01-diseno.md](docs/01-diseno.md).
 | 5.2 | Segmentador-clasificador (IA) y agrupador | Hecha |
 | 5.3 | Extractor (IA) y normalizador | Hecha |
 | 5.4 | Validador, estados y persistencia | Hecha |
-| 5.5 | Evaluación con muestras reales | Pendiente |
+| 5.5 | Evaluación con muestras reales | En curso (58 imágenes) |
 | 5.6 | Interfaz | Hecha |
 | 5.7 | Despliegue | Pendiente |
 
@@ -89,6 +89,25 @@ Un archivo repetido (mismo contenido) no se guarda dos veces: el lote lo reutili
 Una llamada idéntica (misma imagen, mismas instrucciones, mismo modelo) no vuelve a gastar cuota.
 Si se agota la cuota o la clave es rechazada, el lote se detiene; `POST /submissions/{id}/process`
 lo retoma sin repetir lo ya clasificado.
+
+## Evaluación con muestras reales
+
+Las imágenes van en `muestras/imagenes/` (excluida de git: son documentos reales).
+
+```bash
+cd backend
+python -m app.evaluation.run                 # procesa las pendientes y genera el informe
+python -m app.evaluation.run --limite 10     # como mucho 10 imágenes nuevas
+python -m app.evaluation.run --solo-informe  # solo compara, sin llamar a la IA
+```
+
+- Usa una base aparte (`<tu base>_eval_docs`) y `backend/storage_eval/`: no toca tus datos.
+- Si se agota la cuota se detiene; al volver a ejecutarlo retoma donde quedó (la caché evita repetir llamadas).
+- `muestras/respuestas.json`: las respuestas correctas. Cada imagen nueva se agrega prellenada con lo
+  que leyó el sistema y `"revisado": false`; se corrige a mano y se marca `"revisado": true`. Un valor
+  `null` significa que el documento no permite obtenerlo (ausente o ilegible).
+- `muestras/resultados/informe.md`: clasificación, estado, firma y, por campo, correctos, omitidos e
+  **inventados** (un valor distinto del correcto: el error grave).
 
 ## Tests
 
