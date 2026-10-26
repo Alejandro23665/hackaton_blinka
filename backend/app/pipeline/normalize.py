@@ -35,7 +35,9 @@ def _doubtful(raw: str) -> bool:
 
 
 def rut_check_digit(body: int) -> str:
-    """Dígito verificador del RUT chileno (módulo 11)."""
+    """Dígito verificador del RUT chileno (módulo 11): los dígitos del cuerpo, de derecha a izquierda,
+    se multiplican por 2, 3, 4, 5, 6, 7, 2, 3…; el dígito es 11 - (suma mod 11), con 11 → "0" y 10 → "K".
+    Es la misma regla que el script de validación de RUT de Oxxo (VBScript)."""
     total, factor = 0, 2
     for digit in reversed(str(body)):
         total += int(digit) * factor
@@ -52,13 +54,13 @@ def parse_rut(raw: str) -> Parsed:
     compact = re.sub(r"[\s.]", "", text)
     match = re.fullmatch(r"(\d{1,8})-?([\dK])", compact)
     if not match:
-        return Parsed(None, f"formato de RUT no reconocido: {raw!r}")
+        return Parsed(None, f"formato RUT incorrecto ({raw!r}): el cuerpo no es numérico o falta el dígito verificador")
     body, check = int(match.group(1)), match.group(2)
     if body == 0:
-        return Parsed(None, "RUT sin número")
+        return Parsed(None, "formato RUT incorrecto o vacío")
     expected = rut_check_digit(body)
     if check != expected:
-        return Parsed(None, f"el dígito verificador no corresponde (es {check}, debería ser {expected})")
+        return Parsed(None, f"dígito verificador inválido, ingresado: {check}, esperado: {expected}")
     return Parsed(f"{body}-{check}")
 
 
