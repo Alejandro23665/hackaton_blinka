@@ -54,7 +54,7 @@ class DocumentoProcesado(SQLModel, table=True):
     total: int | None = None
     observaciones: str  # LEGIBLE, NO_LEGIBLE o DESCUADRE
     id_tipo_documento: int = Field(foreign_key="tipos_documentos.id")
-    imagen: str  # clave del archivo original en el almacenamiento
+    imagen: str  # nombre del archivo del documento: TIPO_RUT_FOLIO.ext (en documentos/ del almacenamiento)
     # El "Modelo IA" si lo procesó la IA; la persona que lo corrigió, si alguien intervino
     id_usuario: int = Field(foreign_key="usuarios.id")
     # Nombres de columna de los campos con problemas: no se leyeron / se leyeron sin seguridad

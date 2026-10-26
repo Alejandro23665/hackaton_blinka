@@ -16,6 +16,7 @@ y otra con las dos lecturas de todos los documentos.
 """
 import logging
 from collections.abc import Callable
+from pathlib import PurePosixPath
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -26,12 +27,12 @@ from app.ai import client
 from app.ai.client import AIError
 from app.core.config import settings
 from app.models import MODEL_ROLE, DocumentoProcesado, LlamadaIA, Rol, TipoDocumento, Usuario
-from app.pipeline import extractor, segmenter
+from app.pipeline import extractor, images, segmenter
 from app.pipeline.grouper import GroupedDocument, group_pages
 from app.pipeline.normalize import Normalized, is_other_date_label, normalize_extraction, split_tax_lines
 from app.pipeline.preprocess import PreprocessError, RenderedPage, render_pages
 from app.pipeline.validate import OPTIONAL_AMOUNTS, Validation, required_fields, validate
-from app.storage import get_storage
+from app.storage import document_key, get_storage
 
 # Tipo que detecta la IA → código de tipos_documentos
 TYPE_CODES = {"FACTURA_ELECTRONICA": "FC", "CONTROL_INTERNO": "CI", "GUIA_DESPACHO": "GD"}
@@ -83,7 +84,7 @@ class DocumentResult:
 
 @dataclass
 class FileInput:
-    imagen: str  # clave del original en el almacenamiento
+    imagen: str  # clave del original en el almacenamiento (originals/…)
     tipo_contenido: str
 
 
@@ -209,18 +210,24 @@ def model_user_id(session: Session) -> int:
 
 
 def save(session: Session, reading: Reading, image_key: str) -> DocumentResult:
+    """Guarda la fila y una copia del archivo original con el nombre TIPO_RUT_FOLIO (columna imagen)."""
     code = TYPE_CODES[reading.doc_type]
+    values = row_values(reading)
+    base = images.base_name(code, values["rut_proveedor"], values["folio"])
+    name = images.free_name(session, base, PurePosixPath(image_key).suffix)
     row = DocumentoProcesado(
-        **row_values(reading),
+        **values,
         id_tipo_documento=type_ids(session)[code],
-        imagen=image_key,
+        imagen=name,
         id_usuario=model_user_id(session),
     )
+    images.store_copy(image_key, name)
     session.add(row)
     try:
         session.commit()
     except IntegrityError as exc:
         session.rollback()
+        get_storage().delete(document_key(name))
         if "uq_documentos_procesados_documento" not in str(exc):
             raise
         return DocumentResult(

@@ -18,6 +18,7 @@ class Storage(Protocol):
     def put(self, key: str, data: bytes) -> None: ...
     def get(self, key: str) -> bytes: ...
     def exists(self, key: str) -> bool: ...
+    def delete(self, key: str) -> None: ...
 
 
 class LocalStorage:
@@ -43,6 +44,9 @@ class LocalStorage:
     def exists(self, key: str) -> bool:
         return self._path(key).is_file()
 
+    def delete(self, key: str) -> None:
+        self._path(key).unlink(missing_ok=True)
+
 
 def get_storage() -> Storage:
     return LocalStorage(settings.STORAGE_DIR)
@@ -60,3 +64,8 @@ def page_key(sha256: str, page_number: int) -> str:
 def crop_key(region_id) -> str:
     """Recorte de la zona de un documento dentro de su página."""
     return f"crops/{region_id}.jpg"
+
+
+def document_key(name: str) -> str:
+    """Archivo de un documento ya leído, con su nombre TIPO_RUT_FOLIO (columna imagen)."""
+    return f"documentos/{name}"

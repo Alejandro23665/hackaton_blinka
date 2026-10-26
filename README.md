@@ -33,6 +33,10 @@ Se define **solo** con los archivos SQL de [`db/`](db/), que se aplican en orden
 - Los documentos desconocidos (boletas, notas de crédito…) se descartan: no se guardan.
 - El mismo documento (tipo, RUT y folio) no se guarda dos veces; no aplica al RUT ilegible `1-9`.
 - Todo el sistema es del proyecto Oxxo: no hay tabla de proyectos.
+- `imagen` (db/008): nombre del archivo del documento, `TIPO_RUT_FOLIO` más su extensión (por ejemplo
+  `FC_93178000-K_23193169.png`; lo que falta queda vacío, `FC__1458754.png`, y un RUT ilegible se omite). Se
+  copia el original con ese nombre al guardar los datos y se renombra si una persona corrige tipo, RUT o
+  folio; si el nombre ya existe se agrega `-2`. Para documentos guardados antes: `python -m app.pipeline.rename_images`.
 - `llamadas_ia` (db/007): una fila por cada solicitud pagada a la IA (etapa, modelo, tanda, tokens de
   entrada y salida, costo estimado, espera, resultado y documento). Las respuestas de la caché no se registran.
 - Un documento corregido por una persona queda a su nombre y sale de la cola de revisión; si el

@@ -15,8 +15,9 @@ from app.api.deps import SessionDep
 from app.auth import CurrentUser
 from app.core.config import settings
 from app.models import DocumentoProcesado, TipoDocumento, Usuario
+from app.pipeline import images
 from app.pipeline.normalize import parse_document_number, parse_rut
-from app.storage import get_storage
+from app.storage import document_key, get_storage
 
 router = APIRouter(tags=["documentos"])
 
@@ -246,23 +247,31 @@ def correct(documento_id: int, data: Correccion, session: SessionDep, user: Curr
     row.observaciones = observations
     row.id_usuario = user.id
     row.revisado_en = datetime.now(timezone.utc)
+    # Con tipo, RUT o folio corregidos, la imagen toma el nombre nuevo (TIPO_RUT_FOLIO)
+    old_image = images.rename(session, row, data.tipo)
     session.add(row)
     try:
         session.commit()
     except IntegrityError as exc:
         session.rollback()
+        if old_image:
+            get_storage().delete(document_key(row.imagen))
         if "uq_documentos_procesados_documento" in str(exc):
             raise HTTPException(409, "Ya hay otro documento guardado con ese tipo, RUT y folio.") from exc
         raise
+    if old_image:
+        get_storage().delete(document_key(old_image))
     return _read(*_get(session, documento_id))
 
 
 @router.get("/documentos/{documento_id}/imagen")
 def get_image(documento_id: int, session: SessionDep):
-    """El archivo original (imagen o PDF) del que salió el documento."""
+    """El archivo (imagen o PDF) del que salió el documento, con su nombre TIPO_RUT_FOLIO."""
     row, _, _ = _get(session, documento_id)
     storage = get_storage()
-    if not storage.exists(row.imagen):
-        raise HTTPException(404, "El archivo original ya no está en el almacenamiento")
+    key = document_key(row.imagen)
+    if not storage.exists(key):
+        raise HTTPException(404, "El archivo ya no está en el almacenamiento")
     media_type = MEDIA_TYPES.get(PurePosixPath(row.imagen).suffix, "application/octet-stream")
-    return Response(storage.get(row.imagen), media_type=media_type, headers={"Cache-Control": "private, max-age=3600"})
+    headers = {"Cache-Control": "private, no-cache", "Content-Disposition": f'inline; filename="{row.imagen}"'}
+    return Response(storage.get(key), media_type=media_type, headers=headers)
