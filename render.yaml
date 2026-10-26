@@ -15,9 +15,9 @@ services:
         fromDatabase:
           name: blinka-db
           property: connectionString
-      - key: OPENROUTER_API_KEY
+      - key: CLAUDE_KEY
         sync: false
-      - key: ACCESS_PASSWORD
-        sync: false
-      - key: OPENROUTER_MODEL
-        value: nvidia/nemotron-3.5-super-vl:free
+      - key: SECRET_KEY
+        generateValue: true
+      - key: AI_MODEL
+        value: claude-haiku-5-5

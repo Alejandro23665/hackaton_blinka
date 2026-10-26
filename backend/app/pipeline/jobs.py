@@ -1,9 +1,10 @@
 """Trabajos de procesamiento, con su avance en memoria (no en la base).
 
 Una subida de archivos es un trabajo: se validan y se guardan los originales al recibirlos, y se
-procesan después, uno por uno. La pantalla consulta el avance mientras tanto.
+procesan después, todos juntos (sus llamadas a la IA van en las mismas tandas). La pantalla consulta
+el avance mientras tanto, con la etapa en que está.
 
-- Los trabajos se procesan de a uno (cola): así no se disparan llamadas a la IA en paralelo.
+- Los trabajos se procesan de a uno (cola).
 - Si el servidor se reinicia, el avance se pierde; los documentos ya guardados quedan en la base.
 - Se recuerdan los últimos MAX_JOBS trabajos.
 """
@@ -18,10 +19,9 @@ from datetime import datetime, timezone
 from sqlalchemy.engine import Engine
 from sqlmodel import Session
 
-from app.ai.client import AIError
 from app.core.config import settings
-from app.pipeline.preprocess import PreprocessError, detect_type
-from app.pipeline.process import DocumentResult, QuotaExhausted, process_file
+from app.pipeline.preprocess import detect_type
+from app.pipeline.process import AIUnavailable, DocumentResult, FileInput, process_files
 from app.storage import get_storage, original_key
 
 MAX_JOBS = 100
@@ -58,6 +58,9 @@ class Job:
     archivos: list[JobFile]
     estado: str = "EN_COLA"  # EN_COLA, EN_PROCESO, TERMINADO o DETENIDO
     mensaje: str | None = None
+    # Qué está haciendo ahora, por ejemplo "Leyendo documentos. Esperando a Claude…"
+    etapa: str | None = None
+    etapa_desde: datetime | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -122,28 +125,38 @@ def list_jobs() -> list[Job]:
 
 
 def run_job(engine: Engine, job_id: str) -> None:
-    """Procesa los archivos del trabajo (en segundo plano). Si se agota la cuota, se detiene."""
+    """Procesa los archivos del trabajo (en segundo plano). Si no se puede usar la IA, se detiene."""
     job = get_job(job_id)
     if job is None:
         return
+
+    def progress(text: str) -> None:
+        if text != job.etapa:
+            job.etapa, job.etapa_desde = text, datetime.now(timezone.utc)
+
     with _run_lock:
         job.estado = "EN_PROCESO"
+        for item in job.archivos:
+            item.estado = "EN_PROCESO"
+        files = [FileInput(item.imagen, item.tipo_contenido) for item in job.archivos]
         with Session(engine) as session:
-            for index, item in enumerate(job.archivos):
-                item.estado = "EN_PROCESO"
-                try:
-                    item.documentos = process_file(session, item.imagen, item.tipo_contenido)
-                    item.estado = "TERMINADO"
-                except QuotaExhausted as exc:
-                    item.estado, item.mensaje = "ERROR", str(exc)
-                    for rest in job.archivos[index + 1:]:
-                        rest.estado, rest.mensaje = "OMITIDO", "No se procesó: se agotó la cuota de la IA."
-                    job.estado, job.mensaje = "DETENIDO", "Se agotó la cuota de la IA. Vuelve a subir los archivos más tarde."
-                    return
-                except (PreprocessError, AIError) as exc:
-                    item.estado, item.mensaje = "ERROR", str(exc)
-                except Exception as exc:  # error del propio código: se registra y se sigue con el resto
-                    logger.exception("Error inesperado al procesar %s", item.nombre)
-                    session.rollback()
+            try:
+                outcomes = process_files(session, files, progress)
+            except AIUnavailable as exc:
+                for item in job.archivos:
+                    item.estado, item.mensaje = "ERROR", "No se procesó: la IA no está disponible."
+                job.estado, job.mensaje = "DETENIDO", f"{exc} Vuelve a subir los archivos cuando esté resuelto."
+                return
+            except Exception as exc:  # error del propio código: se registra y se informa
+                logger.exception("Error inesperado al procesar el trabajo %s", job.id)
+                session.rollback()
+                for item in job.archivos:
                     item.estado, item.mensaje = "ERROR", f"Error inesperado: {exc}"
+                job.estado = "TERMINADO"
+                return
+            finally:
+                job.etapa = job.etapa_desde = None
+        for item, outcome in zip(job.archivos, outcomes):
+            item.documentos = outcome.documentos
+            item.estado, item.mensaje = ("ERROR", outcome.error) if outcome.error else ("TERMINADO", None)
         job.estado = "TERMINADO"

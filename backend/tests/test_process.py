@@ -46,6 +46,8 @@ def test_correct_invoice_is_stored_as_legible(client, fake_ai):
         "firma": True, "observaciones": "LEGIBLE", "requiere_revision": False,
     }
     assert (doc["total_neto"], doc["iva"], doc["impuestos"], doc["total"]) == (100000, 19000, None, 119000)
+    # Lo procesó la IA, sin campos con problemas
+    assert (doc["usuario"], doc["revisado_en"], doc["campos_faltantes"], doc["campos_dudosos"]) == ("Modelo IA", None, [], [])
     # El revisor puede ver el archivo original
     image = client.get(f"/documentos/{doc['id']}/imagen")
     assert image.status_code == 200 and image.headers["content-type"] == "image/png"
@@ -57,6 +59,7 @@ def test_mismatch_goes_to_human_review(client, fake_ai):
     _upload(client, _image())
     (doc,) = _documents(client)
     assert (doc["observaciones"], doc["requiere_revision"], doc["total"]) == ("DESCUADRE", True, 120000)
+    assert doc["campos_dudosos"] == ["total_neto", "iva", "total"]
 
 
 def test_illegible_required_amount_stores_zeros_and_goes_to_review(client, fake_ai):
@@ -66,6 +69,8 @@ def test_illegible_required_amount_stores_zeros_and_goes_to_review(client, fake_
     (doc,) = _documents(client)
     assert (doc["observaciones"], doc["requiere_revision"]) == ("NO_LEGIBLE", True)
     assert (doc["total_neto"], doc["iva"], doc["impuestos"], doc["total"]) == (0, 0, 0, 0)
+    # Se leyó algo ("2.5??"), pero no es fiable
+    assert (doc["campos_faltantes"], doc["campos_dudosos"]) == ([], ["total_neto"])
 
 
 def test_other_taxes_and_exempt_are_stored_together_as_impuestos(client, fake_ai):
@@ -137,7 +142,8 @@ def test_signature_counts_only_if_both_readings_see_it(client, fake_ai):
     fake_ai.extractions = [extraction(signed=True)]
     fake_ai.verifications = [extraction(signed=False)]
     _upload(client, _image())
-    assert _documents(client)[0]["firma"] is False
+    doc = _documents(client)[0]
+    assert (doc["firma"], doc["campos_dudosos"]) == (False, ["firma"])
 
 
 def test_second_reading_disagreement_makes_the_document_not_legible(client, fake_ai):
@@ -146,7 +152,7 @@ def test_second_reading_disagreement_makes_the_document_not_legible(client, fake
     fake_ai.verifications = [extraction(ISSUE_DATE=reading("18-10-2026", confidence=0.8))]
     _upload(client, _image())
     (doc,) = _documents(client)
-    assert (doc["fecha"], doc["observaciones"]) == (None, "NO_LEGIBLE")
+    assert (doc["fecha"], doc["observaciones"], doc["campos_dudosos"]) == (None, "NO_LEGIBLE", ["fecha"])
 
 
 def test_unvalued_dispatch_guide_is_legible_without_amounts(client, fake_ai):
@@ -159,18 +165,28 @@ def test_unvalued_dispatch_guide_is_legible_without_amounts(client, fake_ai):
     )
 
 
-def test_quota_stops_the_job_and_keeps_what_was_saved(client, fake_ai):
+def test_unavailable_ai_stops_the_whole_job(client, fake_ai):
+    # Las lecturas de los 3 archivos van en la misma tanda: si la tanda no se puede enviar, nada se guarda
     fake_ai.pages = {1: INVOICE}
-    fake_ai.extractions = [extraction(), AIError("Se agotó el límite diario", "CUOTA")]
+    fake_ai.extractions = [extraction(), AIError("Sin saldo en la API de Claude", "CUOTA")]
     job = _upload(client, _image(1), _image(2), _image(3))
-    assert job["estado"] == "DETENIDO"
-    assert [f["estado"] for f in job["archivos"]] == ["TERMINADO", "ERROR", "OMITIDO"]
-    assert len(_documents(client)) == 1
+    assert job["estado"] == "DETENIDO" and "Sin saldo" in job["mensaje"]
+    assert [f["estado"] for f in job["archivos"]] == ["ERROR"] * 3
+    assert _documents(client) == []
+
+
+def test_all_files_of_a_job_share_the_same_batches(client, fake_ai):
+    fake_ai.pages = {1: INVOICE}
+    fake_ai.extractions = [extraction(DOCUMENT_NUMBER=reading(f"N° {n}")) for n in (1, 2, 3)]
+    job = _upload(client, _image(1), _image(2), _image(3))
+    assert [d["resultado"] for f in job["archivos"] for d in f["documentos"]] == ["GUARDADO"] * 3
+    # Una tanda para clasificar las 3 páginas y otra para las 6 lecturas
+    assert fake_ai.batches == 2 and fake_ai.verification_calls == 3
 
 
 def test_provider_error_on_one_document_does_not_stop_the_rest(client, fake_ai):
     fake_ai.pages = {1: INVOICE}
-    fake_ai.extractions = [AIError("OpenRouter respondió 502", "PROVEEDOR"), extraction(DOCUMENT_NUMBER=reading("N° 7"))]
+    fake_ai.extractions = [AIError("Claude no procesó la solicitud: overloaded", "PROVEEDOR"), extraction(DOCUMENT_NUMBER=reading("N° 7"))]
     job = _upload(client, _image(1), _image(2))
     assert job["estado"] == "TERMINADO"
     assert [d["resultado"] for f in job["archivos"] for d in f["documentos"]] == ["ERROR", "GUARDADO"]
@@ -202,3 +218,11 @@ def test_filters_and_summary(client, fake_ai):
     }
     assert [t["documento"] for t in client.get("/tipos-documentos").json()] == ["FC", "CI", "GD"]
     assert client.get("/documentos/999").status_code == 404
+
+
+def test_unreadable_and_absent_required_fields_are_missing(client, fake_ai):
+    fake_ai.pages = {1: INVOICE}
+    fake_ai.extractions = [extraction(ISSUE_DATE=reading(None, status="ILEGIBLE"), DOCUMENT_NUMBER=ABSENT)]
+    _upload(client, _image())
+    (doc,) = _documents(client)
+    assert (doc["campos_faltantes"], doc["campos_dudosos"]) == (["folio", "fecha"], [])

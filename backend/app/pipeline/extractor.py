@@ -8,15 +8,21 @@ import io
 from typing import Literal
 
 from PIL import Image
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.ai import client
 from app.core.config import settings
 from app.pipeline.fields import FIELD_NAMES
 
-PROMPT_VERSION = "ext-7"
+PROMPT_VERSION = "ext-9"
 # Margen alrededor de la zona del documento al recortarla (proporción de la página)
 CROP_MARGIN = 0.03
+
+
+def _none_if_zero(value):
+    """En el esquema, confidence y region_index no admiten null (Claude limita los campos que pueden
+    ser null): 0 significa "no aplica" y se guarda como None."""
+    return None if value == 0 else value
 
 
 class FieldReading(BaseModel):
@@ -25,12 +31,24 @@ class FieldReading(BaseModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
     region_index: int | None
 
+    @model_validator(mode="after")
+    def _absent_values(self):
+        self.region_index = _none_if_zero(self.region_index)
+        if self.status == "AUSENTE":
+            self.confidence = None
+        return self
+
 
 class SignatureReading(BaseModel):
     present: bool
     confidence: float | None = Field(default=None, ge=0, le=1)
     region_index: int | None
     description: str | None
+
+    @model_validator(mode="after")
+    def _absent_values(self):
+        self.region_index = _none_if_zero(self.region_index)
+        return self
 
 
 # IVA y otros impuestos no los lee la IA como campos: el código los calcula con las líneas de impuesto
@@ -44,6 +62,11 @@ class TaxLine(BaseModel):
     raw_text: str | None
     confidence: float | None = Field(default=None, ge=0, le=1)
     region_index: int | None
+
+    @model_validator(mode="after")
+    def _absent_values(self):
+        self.region_index = _none_if_zero(self.region_index)
+        return self
 
 
 class Extraction(BaseModel):
@@ -66,8 +89,8 @@ _FIELD_SCHEMA = {
     "properties": {
         "status": {"type": "string", "enum": ["LEIDO", "AUSENTE", "ILEGIBLE"]},
         "raw_text": {"type": ["string", "null"], "description": "Texto exacto tal como aparece; usa ? en lo que no se lee"},
-        "confidence": {"type": ["number", "null"], "description": "Seguridad en la lectura, de 0 a 1; null si AUSENTE"},
-        "region_index": {"type": ["integer", "null"], "description": "Número de imagen donde está (1, 2…); null si AUSENTE"},
+        "confidence": {"type": "number", "description": "Seguridad en la lectura, de 0 a 1; 0 si AUSENTE"},
+        "region_index": {"type": "integer", "description": "Número de imagen donde está (1, 2…); 0 si AUSENTE"},
     },
 }
 
@@ -93,8 +116,8 @@ RESPONSE_SCHEMA = {
                     "label": {"type": "string", "description": "Nombre del impuesto tal como aparece, p. ej. \"IVA 19%\""},
                     "status": {"type": "string", "enum": ["LEIDO", "ILEGIBLE"]},
                     "raw_text": {"type": ["string", "null"], "description": "Monto exacto; usa ? en lo que no se lee"},
-                    "confidence": {"type": ["number", "null"]},
-                    "region_index": {"type": ["integer", "null"]},
+                    "confidence": {"type": "number", "description": "Seguridad, de 0 a 1"},
+                    "region_index": {"type": "integer", "description": "Imagen donde está (1, 2…)"},
                 },
             },
         },
@@ -104,8 +127,8 @@ RESPONSE_SCHEMA = {
             "required": ["present", "confidence", "region_index", "description"],
             "properties": {
                 "present": {"type": "boolean", "description": "true si hay una firma o anotación manuscrita"},
-                "confidence": {"type": ["number", "null"], "description": "Seguridad, de 0 a 1"},
-                "region_index": {"type": ["integer", "null"], "description": "Imagen donde está; null si no hay"},
+                "confidence": {"type": "number", "description": "Seguridad, de 0 a 1"},
+                "region_index": {"type": "integer", "description": "Imagen donde está (1, 2…); 0 si no hay firma"},
                 "description": {"type": ["string", "null"], "description": "Qué se ve, en una frase; null si no hay"},
             },
         },
@@ -133,8 +156,8 @@ ILEGIBLE si aparece pero no se puede leer con seguridad (borroso, cortado, tapad
 - raw_text: el texto EXACTO como aparece, sin convertirlo (por ejemplo "$ 1.190.000", "14 de octubre \
 de 2026", "76.123.456-0"). Si es ILEGIBLE, copia lo que sí ves y pon ? en cada carácter dudoso \
 (por ejemplo "0?/03/2026"). Si es AUSENTE, null.
-- confidence: de 0 a 1, tu seguridad en la lectura; null si AUSENTE.
-- region_index: en qué imagen está (1 = la primera); null si AUSENTE.
+- confidence: de 0 a 1, tu seguridad en la lectura; 0 si AUSENTE.
+- region_index: en qué imagen está (1 = la primera); 0 si AUSENTE.
 
 Reglas:
 - Nunca inventes, deduzcas ni calcules un valor: si el total no aparece, no lo calcules sumando; \
@@ -144,7 +167,8 @@ si falta el IVA, no lo calcules desde el neto. Lee solo lo que está escrito.
 - Ignora por completo la hoja adjunta tipo ticket si aparece: una tira de papel angosta (impresa en \
 impresora térmica), con un número arriba, una lista de productos con código, descripción y cantidad, y \
 al final las líneas "Neto", "Iva", "Imp Adic." y "Total". Suele estar corcheteada o superpuesta sobre el \
-documento. Nunca tomes de ella el número, el neto, el IVA, los impuestos adicionales ni el total: los \
+documento. Esa hoja NO tiene un recuadro con "R.U.T.", el tipo de documento y "N°". Un ticket térmico CON ese recuadro (por ejemplo un CONTROL INTERNO o una GUÍA ELECTRÓNICA de OXXO) es un documento real, nunca la hoja adjunta, aunque esté superpuesto sobre otro papel. Si el documento que lees es un ticket con ese recuadro, el ticket ES el \
+documento y lo que se ve debajo no se lee. Nunca tomes de ella el número, el neto, el IVA, los impuestos adicionales ni el total: los \
 campos se leen solo del documento, y su texto no va en transcription. Si esa hoja tapa un dato del \
 documento, ese campo es ILEGIBLE.
 - signature: si el documento está FIRMADO. present es true si hay trazos manuscritos de recepción: una firma o rúbrica, o un nombre, RUT o fecha escritos a mano (normalmente con lápiz azul o negro, en la parte inferior, sobre o junto a un recuadro con "Nombre:", "RUT:", "Fecha:", "Recinto:" o "Firma:"). Un recuadro con esas etiquetas pero vacío, o solo texto impreso, es false. La firma puede estar en cualquier hoja: indica en region_index en cuál.
@@ -167,7 +191,7 @@ _TYPE_HINTS = {
 
 
 def model_name() -> str:
-    return settings.EXTRACTOR_MODEL or settings.OPENROUTER_MODEL
+    return settings.EXTRACTOR_MODEL or settings.AI_MODEL
 
 
 def crop(jpeg: bytes, bbox: dict) -> bytes:
@@ -184,11 +208,12 @@ def crop(jpeg: bytes, bbox: dict) -> bytes:
         return buffer.getvalue()
 
 
-def extract_document(doc_type: str, images: list[tuple[bytes, str]], temperature: float = 0) -> client.AIResult:
-    """`images`: por cada región del documento, en orden, la imagen y una descripción ("hoja 1 de 2…").
+def document_request(key: str, doc_type: str, images: list[tuple[bytes, str]], reading: int = 1) -> client.AIRequest:
+    """La solicitud al agente para un documento. `images`: por cada región, en orden, la imagen y una
+    descripción ("hoja 1 de 2…").
 
-    `temperature` > 0 se usa en la segunda lectura (verificación): lo que se lee con nitidez sale igual;
-    lo que el modelo adivina tiende a variar.
+    `reading` distingue lecturas independientes del mismo documento (la segunda es la verificación):
+    lo que se lee con nitidez sale igual; lo que el modelo adivina tiende a variar.
     """
     content = [
         client.text_part(
@@ -198,12 +223,13 @@ def extract_document(doc_type: str, images: list[tuple[bytes, str]], temperature
     for number, (jpeg, description) in enumerate(images, start=1):
         content.append(client.text_part(f"Imagen {number}: {description}"))
         content.append(client.image_part(jpeg))
-    return client.call_json(
+    return client.AIRequest(
+        key=key,
+        kind="document_extraction",
         system=SYSTEM_PROMPT,
         content=content,
         schema=RESPONSE_SCHEMA,
-        schema_name="document_extraction",
         model=model_name(),
         parse=Extraction.model_validate,
-        temperature=temperature,
+        reading=reading,
     )

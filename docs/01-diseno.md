@@ -107,6 +107,17 @@ Se define solo con los archivos SQL de `db/` (001, 002…), aplicados en orden. 
 | `tipos_documentos` | Solo FC (factura electrónica), CI (control interno) y GD (guía de despacho) |
 | `documentos_procesados` | Una fila por documento: `rut_proveedor`, `folio` (texto: conserva ceros), `fecha`, `firma`, `impuestos` (otros impuestos + exento), `total_neto`, `iva`, `total` (pesos, enteros, nunca negativos), `observaciones`, `requiere_revision` (calculada por la base), `id_tipo_documento` e `imagen` (archivo original) |
 
+Revisión humana (db/005):
+- Cada documento apunta a un usuario (`id_usuario`): el usuario "Modelo IA" (rol `MODELO`, no puede
+  iniciar sesión) cuando lo procesa la IA, o la persona que lo corrigió.
+- Al procesar se guardan `campos_faltantes` (no se leyeron) y `campos_dudosos` (se leyó algo no
+  fiable: confianza baja, lecturas que no coinciden, montos de un descuadre, firma vista por una
+  sola lectura), con los nombres de las columnas.
+- Corregir aplica las mismas reglas (RUT con dígito verificador, suma). Si no cuadra, la persona
+  confirma el descuadre real y queda `DESCUADRE` revisado. `revisado_en` se fija y el documento sale
+  de la cola: `requiere_revision = observaciones <> 'LEGIBLE' AND revisado_en IS NULL`.
+- Inicio de sesión con email y contraseña (scrypt) y un token firmado con `SECRET_KEY`.
+
 Reglas que hace cumplir la propia base:
 - `observaciones` solo admite `LEGIBLE`, `NO_LEGIBLE` y `DESCUADRE`; `requiere_revision` es
   `observaciones <> 'LEGIBLE'` y nadie la puede escribir.
@@ -118,6 +129,8 @@ el documento `NO_LEGIBLE`; una guía sin valorizar deja sus montos vacíos y es 
 
 ## Tecnología
 
-FastAPI · PostgreSQL (definida en `db/*.sql`) + SQLModel · OpenRouter (modelo configurable; hoy
-`nvidia/nemotron-3.5-super-vl:free`) · pypdfium2 + Pillow · React + Vite + Tailwind · Docker en
+FastAPI · PostgreSQL (definida en `db/*.sql`) + SQLModel · Claude (`claude-haiku-5-5` por defecto,
+configurable con `AI_MODEL`) con la Message Batches API: las páginas de una subida van en una tanda
+(en un PDF, una ronda por número de página) y las dos lecturas de todos sus documentos en otra; el
+esquema JSON lo hace cumplir el servidor (`output_config.format`) · pypdfium2 + Pillow · React + Vite + Tailwind · Docker en
 Railway con volumen para los archivos.

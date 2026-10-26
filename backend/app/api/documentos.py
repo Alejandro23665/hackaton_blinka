@@ -1,15 +1,21 @@
-"""Consulta de documentos_procesados y de los tipos de documento."""
-from datetime import date, datetime
+"""Consulta y corrección de documentos_procesados, totales del día y tipos de documento."""
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import PurePosixPath
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
-from pydantic import BaseModel
-from sqlalchemy import func, or_
+from pydantic import BaseModel, Field
+from sqlalchemy import Date, case, cast, func, literal, or_
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 
 from app.api.deps import SessionDep
-from app.models import DocumentoProcesado, TipoDocumento
+from app.auth import CurrentUser
+from app.core.config import settings
+from app.models import DocumentoProcesado, TipoDocumento, Usuario
+from app.pipeline.normalize import parse_document_number, parse_rut
 from app.storage import get_storage
 
 router = APIRouter(tags=["documentos"])
@@ -20,7 +26,6 @@ MEDIA_TYPES = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jp
 class TipoDocumentoRead(BaseModel):
     id: int
     documento: str
-    descripcion: str
 
 
 class DocumentoRead(BaseModel):
@@ -36,7 +41,12 @@ class DocumentoRead(BaseModel):
     total: int | None
     observaciones: str
     requiere_revision: bool
+    campos_faltantes: list[str]
+    campos_dudosos: list[str]
     imagen: str
+    id_usuario: int
+    usuario: str  # "Modelo IA" o la persona que lo corrigió
+    revisado_en: datetime | None
     creado_en: datetime
 
 
@@ -52,8 +62,46 @@ class Resumen(BaseModel):
     por_tipo: dict[str, int]
 
 
-def _read(row: DocumentoProcesado, tipo: str) -> DocumentoRead:
-    return DocumentoRead(tipo=tipo, **row.model_dump(exclude={"id_tipo_documento"}))
+class Dia(BaseModel):
+    fecha: date
+    registrados: int  # documentos guardados ese día
+    procesados_ia: int  # legibles sin intervención de una persona
+    requieren_revision: int  # pendientes de revisión humana
+    revisados: int  # corregidos o confirmados por una persona
+    pendientes_total: int  # pendientes de revisión de todos los días
+
+
+class Correccion(BaseModel):
+    """Los datos que confirma o corrige una persona."""
+
+    tipo: Literal["FC", "CI", "GD"]
+    rut_proveedor: str
+    folio: str = Field(min_length=1, max_length=20)
+    fecha: date
+    firma: bool
+    total_neto: int | None = Field(None, ge=0)
+    iva: int | None = Field(None, ge=0)
+    impuestos: int | None = Field(None, ge=0)
+    total: int | None = Field(None, ge=0)
+    # Si los montos no cuadran, la persona confirma que el documento trae ese descuadre
+    confirmar_descuadre: bool = False
+
+
+def _query():
+    return (
+        select(DocumentoProcesado, TipoDocumento.documento, Usuario.nombre)
+        .join(TipoDocumento, col(TipoDocumento.id) == DocumentoProcesado.id_tipo_documento)
+        .join(Usuario, col(Usuario.id) == DocumentoProcesado.id_usuario)
+    )
+
+
+def _read(row: DocumentoProcesado, tipo: str, usuario: str) -> DocumentoRead:
+    return DocumentoRead(tipo=tipo, usuario=usuario, **row.model_dump(exclude={"id_tipo_documento"}))
+
+
+def _local_day(column):
+    """Fecha de un instante en la zona horaria del negocio (por defecto, Chile)."""
+    return cast(func.timezone(settings.TIMEZONE, column), Date)
 
 
 @router.get("/tipos-documentos", response_model=list[TipoDocumentoRead])
@@ -68,13 +116,12 @@ def list_documents(
     observaciones: str | None = Query(None, description="LEGIBLE, NO_LEGIBLE o DESCUADRE"),
     requiere_revision: bool | None = None,
     q: str | None = Query(None, description="Busca en RUT y folio"),
+    orden: Literal["recientes", "antiguos"] = "recientes",
     limite: int = Query(50, ge=1, le=500),
     desde: int = Query(0, ge=0),
 ):
-    """Los más recientes primero."""
-    query = select(DocumentoProcesado, TipoDocumento.documento).join(
-        TipoDocumento, col(TipoDocumento.id) == DocumentoProcesado.id_tipo_documento
-    )
+    """Por defecto los más recientes primero; la cola de revisión usa los más antiguos primero."""
+    query = _query()
     if tipo:
         query = query.where(TipoDocumento.documento == tipo.upper())
     if observaciones:
@@ -85,10 +132,11 @@ def list_documents(
         term = f"%{q.strip()}%"
         query = query.where(or_(col(DocumentoProcesado.folio).ilike(term), col(DocumentoProcesado.rut_proveedor).ilike(term)))
     total = session.exec(select(func.count()).select_from(query.subquery())).one()
-    rows = session.exec(
-        query.order_by(col(DocumentoProcesado.creado_en).desc(), col(DocumentoProcesado.id).desc()).offset(desde).limit(limite)
-    ).all()
-    return DocumentoPage(total=total, documentos=[_read(row, code) for row, code in rows])
+    order = (col(DocumentoProcesado.creado_en), col(DocumentoProcesado.id))
+    if orden == "recientes":
+        order = tuple(c.desc() for c in order)
+    rows = session.exec(query.order_by(*order).offset(desde).limit(limite)).all()
+    return DocumentoPage(total=total, documentos=[_read(*row) for row in rows])
 
 
 @router.get("/documentos/resumen", response_model=Resumen)
@@ -105,21 +153,45 @@ def summary(session: SessionDep):
             .group_by(TipoDocumento.documento)
         ).all()
     )
-    total = sum(by_observation.values())
+    pending = session.exec(select(func.count()).where(col(DocumentoProcesado.requiere_revision))).one()
     return Resumen(
-        total=total,
-        requieren_revision=total - by_observation.get("LEGIBLE", 0),
+        total=sum(by_observation.values()),
+        requieren_revision=pending,
         por_observaciones=by_observation,
         por_tipo=by_type,
     )
 
 
-def _get(session: SessionDep, documento_id: int) -> tuple[DocumentoProcesado, str]:
-    found = session.exec(
-        select(DocumentoProcesado, TipoDocumento.documento)
-        .join(TipoDocumento, col(TipoDocumento.id) == DocumentoProcesado.id_tipo_documento)
-        .where(DocumentoProcesado.id == documento_id)
-    ).first()
+@router.get("/documentos/dia", response_model=Dia)
+def day(session: SessionDep, fecha: date | None = Query(None, description="Por defecto, hoy")):
+    """Totales de los documentos registrados en un día (zona horaria TIMEZONE)."""
+    day_value = fecha or session.exec(select(_local_day(func.now()))).one()
+
+    def count(condition):
+        return func.count(case((condition, literal(1))))
+
+    reviewed = col(DocumentoProcesado.revisado_en).is_not(None)
+    registered, by_ai, pending, by_person = session.exec(
+        select(
+            func.count(),
+            count((DocumentoProcesado.observaciones == "LEGIBLE") & ~reviewed),
+            count(col(DocumentoProcesado.requiere_revision)),
+            count(reviewed),
+        ).where(_local_day(col(DocumentoProcesado.creado_en)) == day_value)
+    ).one()
+    pending_total = session.exec(select(func.count()).where(col(DocumentoProcesado.requiere_revision))).one()
+    return Dia(
+        fecha=day_value,
+        registrados=registered,
+        procesados_ia=by_ai,
+        requieren_revision=pending,
+        revisados=by_person,
+        pendientes_total=pending_total,
+    )
+
+
+def _get(session: SessionDep, documento_id: int) -> tuple[DocumentoProcesado, str, str]:
+    found = session.exec(_query().where(DocumentoProcesado.id == documento_id)).first()
     if found is None:
         raise HTTPException(404, "Documento no encontrado")
     return found
@@ -127,14 +199,68 @@ def _get(session: SessionDep, documento_id: int) -> tuple[DocumentoProcesado, st
 
 @router.get("/documentos/{documento_id}", response_model=DocumentoRead)
 def get_document(documento_id: int, session: SessionDep):
-    row, code = _get(session, documento_id)
-    return _read(row, code)
+    return _read(*_get(session, documento_id))
+
+
+@router.put("/documentos/{documento_id}/correccion", response_model=DocumentoRead)
+def correct(documento_id: int, data: Correccion, session: SessionDep, user: CurrentUser):
+    """Una persona corrige o confirma los datos. Queda a su nombre y sale de la cola de revisión.
+
+    Se aplican las mismas reglas que al procesar: RUT con dígito verificador correcto y
+    neto + IVA + impuestos = total. Si no cuadra, solo se guarda si la persona confirma el descuadre.
+    """
+    row, _, _ = _get(session, documento_id)
+    rut = parse_rut(data.rut_proveedor)
+    if rut.value is None:
+        raise HTTPException(422, f"RUT no válido: {rut.reason}")
+    folio = parse_document_number(data.folio)
+    if folio.value is None:
+        raise HTTPException(422, f"Folio no válido: {folio.reason}")
+
+    amounts = (data.total_neto, data.iva, data.impuestos, data.total)
+    unvalued_guide = data.tipo == "GD" and all(a is None for a in amounts)
+    if unvalued_guide:
+        observations = "LEGIBLE"
+    else:
+        missing = [name for name in ("total_neto", "iva", "total") if getattr(data, name) is None]
+        if missing:
+            raise HTTPException(422, "Faltan montos obligatorios: " + ", ".join(missing))
+        difference = data.total - (data.total_neto + data.iva + (data.impuestos or 0))
+        observations = "LEGIBLE"
+        if abs(Decimal(difference)) > settings.TOTAL_TOLERANCE_CLP:
+            if not data.confirmar_descuadre:
+                raise HTTPException(
+                    422,
+                    f"Neto + IVA + impuestos no da el total (diferencia {difference}). "
+                    "Revisa los montos o confirma que el documento trae ese descuadre.",
+                )
+            observations = "DESCUADRE"
+
+    type_id = session.exec(select(TipoDocumento.id).where(TipoDocumento.documento == data.tipo)).one()
+    row.id_tipo_documento = type_id
+    row.rut_proveedor = rut.value
+    row.folio = folio.value
+    row.fecha = data.fecha
+    row.firma = data.firma
+    row.total_neto, row.iva, row.impuestos, row.total = amounts
+    row.observaciones = observations
+    row.id_usuario = user.id
+    row.revisado_en = datetime.now(timezone.utc)
+    session.add(row)
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        if "uq_documentos_procesados_documento" in str(exc):
+            raise HTTPException(409, "Ya hay otro documento guardado con ese tipo, RUT y folio.") from exc
+        raise
+    return _read(*_get(session, documento_id))
 
 
 @router.get("/documentos/{documento_id}/imagen")
 def get_image(documento_id: int, session: SessionDep):
     """El archivo original (imagen o PDF) del que salió el documento."""
-    row, _ = _get(session, documento_id)
+    row, _, _ = _get(session, documento_id)
     storage = get_storage()
     if not storage.exists(row.imagen):
         raise HTTPException(404, "El archivo original ya no está en el almacenamiento")

@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from app.ai import client
 from app.core.config import settings
 
-PROMPT_VERSION = "seg-4"
+PROMPT_VERSION = "seg-5"
 
 DocType = Literal["GUIA_DESPACHO", "CONTROL_INTERNO", "FACTURA_ELECTRONICA", "DESCONOCIDO"]
 
@@ -126,6 +126,7 @@ uno por documento, numerados de izquierda a derecha y de arriba abajo.
 - Hoja adjunta que se IGNORA: una tira de papel angosta tipo ticket (impresa en impresora térmica), \
 con un número arriba, una lista de productos con código, descripción y cantidad, y al final las líneas \
 "Neto", "Iva", "Imp Adic." y "Total". Suele estar corcheteada o superpuesta sobre el documento real. \
+Esa hoja NO tiene un recuadro con "R.U.T.", el tipo de documento y "N°". Un ticket térmico CON ese recuadro (por ejemplo un CONTROL INTERNO o una GUÍA ELECTRÓNICA de OXXO) es un documento real, nunca la hoja adjunta, aunque esté superpuesto sobre otro papel. \
 No es un documento del lote: no la devuelvas como documento ni uses su número o su título. Si tapa parte \
 de un documento, informa solo ese documento, con su zona completa. Solo si en la página no hay nada más \
 que esa hoja, devuelve un único elemento DESCONOCIDO de página completa.
@@ -143,21 +144,22 @@ girada…), en español. Lista vacía si no hay."""
 
 
 def model_name() -> str:
-    return settings.SEGMENTER_MODEL or settings.OPENROUTER_MODEL
+    return settings.SEGMENTER_MODEL or settings.AI_MODEL
 
 
-def analyze_page(jpeg: bytes, page_number: int, total_pages: int, previous: str | None) -> client.AIResult:
-    """Llama al agente para una página. `previous` resume cómo terminó la página anterior."""
+def page_request(key: str, jpeg: bytes, page_number: int, total_pages: int, previous: str | None) -> client.AIRequest:
+    """La solicitud al agente para una página. `previous` resume cómo terminó la página anterior."""
     context = (
         f"La página anterior terminaba con: {previous}."
         if previous
         else "Es la primera página del archivo: ningún documento puede ser continuación."
     )
-    return client.call_json(
+    return client.AIRequest(
+        key=key,
+        kind="page_segmentation",
         system=SYSTEM_PROMPT,
         content=[client.text_part(f"Página {page_number} de {total_pages} del archivo. {context}"), client.image_part(jpeg)],
         schema=RESPONSE_SCHEMA,
-        schema_name="page_segmentation",
         model=model_name(),
         parse=PageAnalysis.model_validate,
     )

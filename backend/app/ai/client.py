@@ -1,31 +1,59 @@
-"""Cliente de OpenRouter para los agentes: una llamada con imagen(es) y respuesta JSON con esquema estricto.
+"""Cliente de Claude para los agentes: solicitudes con imagen(es) y respuesta JSON con esquema estricto.
 
-- Reintenta ante errores pasajeros (408, 429, 5xx) con espera creciente, y ante JSON inválido.
-- El límite diario de los modelos gratuitos no se reintenta: se avisa con un error claro.
-- Caché en disco: una llamada idéntica (mismos mensajes, esquema y modelo) devuelve la respuesta
-  guardada sin gastar cuota. Cambiar la imagen, las instrucciones o el modelo cambia la clave.
+- Las solicitudes se envían juntas en una tanda de la Message Batches API (mitad de precio; la
+  mayoría termina en menos de una hora, máximo 24 h). Con AI_BATCH=false se llaman una por una
+  con la Messages API (más rápido para probar).
+- El esquema JSON lo hace cumplir el servidor (`output_config.format`): la respuesta siempre es
+  JSON válido con esa forma. El código la vuelve a validar con `parse` (Pydantic).
+- Caché en disco: una solicitud idéntica (mismas instrucciones, imágenes, esquema, modelo y lectura)
+  devuelve la respuesta guardada sin volver a pagarla. Solo se guardan respuestas válidas.
+- Errores: los que afectan a toda la tanda (clave, saldo, límite de uso) se lanzan como AIError;
+  los de una solicitud se devuelven como AIError en el resultado de esa solicitud.
 """
 import base64
 import hashlib
 import json
-import re
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from decimal import Decimal
 from typing import Any
 
-import httpx
+import anthropic
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
+# Una tanda admite hasta 256 MB: se parte antes, con margen
+MAX_BATCH_BYTES = 200 * 1024 * 1024
+MAX_BATCH_REQUESTS = 100_000
+# Palabras del esquema JSON que Claude no admite en output_config.format (el código las valida igual)
+_UNSUPPORTED_SCHEMA_KEYS = {"minItems", "maxItems", "minimum", "maximum", "minLength", "maxLength", "multipleOf"}
+
 
 class AIError(Exception):
-    """Fallo de la llamada a la IA. code: SIN_CLAVE, CLAVE (rechazada), CUOTA, PROVEEDOR o FORMATO."""
+    """Fallo de la IA. code: SIN_CLAVE, CLAVE (rechazada), CUOTA (saldo o límite de uso), PROVEEDOR,
+    RECHAZO (Claude se negó) o FORMATO (respuesta incompleta o que no pasa la validación)."""
 
     def __init__(self, message: str, code: str):
         super().__init__(message)
         self.code = code
+
+
+@dataclass
+class AIRequest:
+    """Una solicitud al modelo. `key` la identifica dentro de la tanda (letras, números, - y _)."""
+
+    key: str
+    kind: str  # "page_segmentation" o "document_extraction"
+    system: str
+    content: list[dict]
+    schema: dict
+    model: str
+    parse: Callable[[dict], Any]
+    # Lecturas independientes del mismo contenido (1, 2…): la solicitud es la misma, la caché no
+    reading: int = 1
 
 
 @dataclass
@@ -34,185 +62,199 @@ class AIResult:
     # Lo que devolvió `parse` (por ejemplo, un modelo Pydantic ya validado)
     parsed: Any
     model: str
-    attempts: int
-    duration_ms: int
-    cost_usd: Decimal | None = None
     cached: bool = False
     usage: dict[str, Any] = field(default_factory=dict)
 
 
 def image_part(jpeg: bytes) -> dict:
-    encoded = base64.b64encode(jpeg).decode()
-    return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}}
+    data = base64.standard_b64encode(jpeg).decode()
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}}
 
 
 def text_part(text: str) -> dict:
     return {"type": "text", "text": text}
 
 
-def _message_text(content: Any) -> str:
-    if isinstance(content, list):  # algunos proveedores devuelven partes
-        return "".join(p.get("text", "") for p in content if isinstance(p, dict))
-    return content or ""
+def claude_schema(schema: Any) -> Any:
+    """El esquema de los agentes en la forma que admite Claude: `"type": [x, "null"]` pasa a `anyOf`
+    y se quitan los límites numéricos y de largo (Pydantic los comprueba al validar)."""
+    if isinstance(schema, list):
+        return [claude_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    result = {key: claude_schema(value) for key, value in schema.items() if key not in _UNSUPPORTED_SCHEMA_KEYS}
+    kind = result.get("type")
+    if isinstance(kind, list):
+        description = result.pop("description", None)
+        del result["type"]
+        result["anyOf"] = [{"type": t} for t in kind]
+        if description:
+            result["description"] = description
+    return result
 
 
-def _parse_json(text: str) -> dict:
-    text = text.strip()
-    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
-    if fenced:
-        text = fenced.group(1)
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1:
-        raise ValueError("el modelo no devolvió JSON")
-    return json.loads(text[start : end + 1])
+def _params(request: AIRequest) -> dict:
+    return {
+        "model": request.model,
+        "max_tokens": settings.AI_MAX_TOKENS,
+        "system": request.system,
+        "messages": [{"role": "user", "content": request.content}],
+        "output_config": {
+            "effort": settings.AI_EFFORT,
+            "format": {"type": "json_schema", "schema": claude_schema(request.schema)},
+        },
+    }
 
 
-# Errores pasajeros del proveedor (saturación, límite por minuto, timeouts): vale la pena reintentar
-RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
-
-
-def _is_daily_quota(status_code: int, body: dict) -> bool:
-    """Límite diario de modelos gratuitos: no se arregla reintentando, solo al día siguiente o con créditos."""
-    message = str((body.get("error") or {}).get("message", "")).lower()
-    return status_code == 429 and ("per-day" in message or "per day" in message)
-
-
-def _error(status_code: int, body: dict, raw_text: str) -> AIError:
-    if _is_daily_quota(status_code, body):
-        return AIError(
-            "Se agotó el límite diario de uso gratuito de OpenRouter (se renueva a las 00:00 UTC). "
-            "Reprocesa el lote después o añade créditos en openrouter.ai.",
-            "CUOTA",
-        )
-    error = body.get("error") or {}
-    message = error.get("message") or raw_text[:300] or "sin detalle"
-    if status_code in (401, 403):
-        return AIError(
-            f"OpenRouter rechazó la clave ({status_code}: {message}). Revisa OPENROUTER_API_KEY en el .env: "
-            "puede estar revocada o mal copiada.",
-            "CLAVE",
-        )
-    provider = (error.get("metadata") or {}).get("provider_name")
-    suffix = f" (proveedor {provider})" if provider else ""
-    return AIError(f"OpenRouter respondió {status_code}: {message}{suffix}", "PROVEEDOR")
-
-
-def _post_with_retries(payload: dict) -> tuple[dict, int]:
-    """POST a OpenRouter con reintentos. Devuelve el cuerpo y el número de intentos."""
-    headers = {"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}", "X-Title": "Captura de documentos"}
-    attempts = max(1, settings.OPENROUTER_MAX_RETRIES + 1)
-    for attempt in range(attempts):
-        last = attempt == attempts - 1
-        try:
-            response = httpx.post(
-                f"{settings.OPENROUTER_BASE_URL}/chat/completions",
-                json=payload,
-                headers=headers,
-                timeout=settings.OPENROUTER_TIMEOUT_S,
-            )
-        except httpx.HTTPError as exc:
-            if last:
-                raise AIError(f"No se pudo contactar con OpenRouter: {exc}", "PROVEEDOR") from exc
-            time.sleep(2**attempt)
-            continue
-
-        is_json = response.headers.get("content-type", "").startswith("application/json")
-        body = response.json() if is_json else {}
-        error = body.get("error")
-        if response.status_code == 200 and not error:
-            return body, attempt + 1
-
-        # OpenRouter puede devolver 200 con el error del proveedor dentro del cuerpo
-        status_code = response.status_code
-        if status_code == 200 and isinstance(error.get("code"), int):
-            status_code = error["code"]
-        if status_code in RETRYABLE_STATUS and not last and not _is_daily_quota(status_code, body):
-            time.sleep(2**attempt)
-            continue
-        raise _error(status_code, body, response.text)
-    raise AssertionError("inalcanzable")
-
-
-def _cache_path(payload: dict):
-    key = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+def _cache_path(request: AIRequest, params: dict):
+    key = hashlib.sha256(
+        json.dumps({"params": params, "reading": request.reading}, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
     return settings.AI_CACHE_DIR / key[:2] / f"{key}.json"
 
 
-def call_json(
-    *,
-    system: str,
-    content: list[dict],
-    schema: dict,
-    schema_name: str,
-    model: str,
-    parse: Callable[[dict], Any],
-    temperature: float = 0,
-) -> AIResult:
-    """Llama al modelo y devuelve su JSON ya validado por `parse`.
+def _client() -> anthropic.Anthropic:
+    return anthropic.Anthropic(api_key=settings.CLAUDE_KEY, max_retries=settings.AI_MAX_RETRIES)
 
-    `parse` lanza ValueError (o un error de Pydantic, que lo es) si la respuesta no tiene la forma
-    esperada: cuenta como respuesta mal formada, se vuelve a pedir y nunca se guarda en la caché.
-    """
-    if not settings.OPENROUTER_API_KEY:
-        raise AIError("Falta OPENROUTER_API_KEY en el archivo .env; los agentes no pueden leer documentos.", "SIN_CLAVE")
 
-    payload = {
-        "model": model,
-        "temperature": temperature,
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {"name": schema_name, "strict": True, "schema": schema},
-        },
-    }
-    if settings.OPENROUTER_REASONING:
-        # Forma parte de la llamada: cambiarlo cambia también la clave de la caché
-        payload["reasoning"] = settings.OPENROUTER_REASONING
-    cache_file = _cache_path(payload)
-    if settings.AI_CACHE_ENABLED and cache_file.is_file():
-        cached = json.loads(cache_file.read_text(encoding="utf-8"))
+def _fatal(exc: anthropic.APIError) -> AIError:
+    """Errores que impiden enviar la tanda: no tiene sentido seguir hasta corregirlos."""
+    message = getattr(exc, "message", str(exc))
+    if isinstance(exc, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):
+        return AIError(f"Claude rechazó la clave ({message}). Revisa CLAUDE_KEY en el .env.", "CLAVE")
+    if isinstance(exc, anthropic.RateLimitError) or "credit balance" in message.lower():
+        return AIError(f"Sin saldo o sobre el límite de uso de la API de Claude: {message}", "CUOTA")
+    return AIError(f"Error de la API de Claude: {message}", "PROVEEDOR")
+
+
+def _read_message(request: AIRequest, message) -> AIResult | AIError:
+    """El JSON de la respuesta, validado. Un AIError si no sirve."""
+    if message.stop_reason == "refusal":
+        category = getattr(message.stop_details, "category", None) if message.stop_details else None
+        return AIError(f"Claude se negó a responder (categoría: {category}).", "RECHAZO")
+    if message.stop_reason == "max_tokens":
+        return AIError("La respuesta quedó cortada (AI_MAX_TOKENS es muy bajo).", "FORMATO")
+    text = next((block.text for block in message.content if block.type == "text"), None)
+    if text is None:
+        return AIError("La respuesta no trae texto.", "FORMATO")
+    try:
+        data = json.loads(text)
+        parsed = request.parse(data)
+    except (ValueError, KeyError, TypeError) as exc:  # ValueError incluye los errores de Pydantic
+        return AIError(f"La respuesta no tiene la forma esperada: {exc}", "FORMATO")
+    usage = message.usage.model_dump() if message.usage else {}
+    return AIResult(data=data, parsed=parsed, model=message.model, usage=usage)
+
+
+def _run_direct(client: anthropic.Anthropic, pending: list[tuple[AIRequest, dict]], progress) -> dict:
+    results = {}
+    for number, (request, params) in enumerate(pending, start=1):
+        progress(f"Consultando a Claude ({number} de {len(pending)})")
         try:
-            return AIResult(
-                data=cached["data"], parsed=parse(cached["data"]), model=cached["model"],
-                attempts=0, duration_ms=0, cached=True,
+            message = client.messages.create(**params)
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError, anthropic.RateLimitError) as exc:
+            raise _fatal(exc) from exc
+        except anthropic.APIStatusError as exc:
+            if "credit balance" in exc.message.lower():
+                raise _fatal(exc) from exc
+            results[request.key] = AIError(f"Error de la API de Claude: {exc.message}", "PROVEEDOR")
+            continue
+        except anthropic.APIConnectionError as exc:
+            results[request.key] = AIError(f"No se pudo contactar con Claude: {exc}", "PROVEEDOR")
+            continue
+        results[request.key] = _read_message(request, message)
+    return results
+
+
+def _chunks(pending: list[tuple[AIRequest, dict]]):
+    """Parte las solicitudes en tandas dentro de los límites de la API."""
+    chunk, size = [], 0
+    for item in pending:
+        item_size = len(json.dumps(item[1]))
+        if chunk and (size + item_size > MAX_BATCH_BYTES or len(chunk) >= MAX_BATCH_REQUESTS):
+            yield chunk
+            chunk, size = [], 0
+        chunk.append(item)
+        size += item_size
+    if chunk:
+        yield chunk
+
+
+def _run_batch(client: anthropic.Anthropic, pending: list[tuple[AIRequest, dict]], progress) -> dict:
+    by_key = {request.key: request for request, _ in pending}
+    results = {}
+    for chunk in _chunks(pending):
+        try:
+            batch = client.messages.batches.create(
+                requests=[{"custom_id": request.key, "params": params} for request, params in chunk]
             )
-        except ValueError:
-            pass  # la validación cambió y la respuesta guardada ya no sirve: se vuelve a pedir
+        except anthropic.APIError as exc:
+            raise _fatal(exc) from exc
+        logger.info("Tanda %s enviada con %d solicitudes", batch.id, len(chunk))
+        deadline = time.monotonic() + settings.AI_BATCH_MAX_WAIT_S
+        while batch.processing_status != "ended":
+            counts = batch.request_counts
+            done = counts.succeeded + counts.errored + counts.canceled + counts.expired
+            progress(f"Esperando a Claude: tanda de {len(chunk)} solicitudes, {done} listas")
+            if time.monotonic() > deadline:
+                client.messages.batches.cancel(batch.id)
+                raise AIError(f"La tanda {batch.id} no terminó a tiempo; se canceló.", "PROVEEDOR")
+            time.sleep(settings.AI_BATCH_POLL_S)
+            batch = client.messages.batches.retrieve(batch.id)
+        # Los resultados llegan en cualquier orden: se emparejan por custom_id
+        for item in client.messages.batches.results(batch.id):
+            request = by_key[item.custom_id]
+            outcome = item.result
+            if outcome.type == "succeeded":
+                results[request.key] = _read_message(request, outcome.message)
+            elif outcome.type == "errored":
+                error = outcome.error.error if hasattr(outcome.error, "error") else outcome.error
+                results[request.key] = AIError(f"Claude no procesó la solicitud: {getattr(error, 'message', error)}", "PROVEEDOR")
+            else:  # canceled o expired
+                results[request.key] = AIError(f"La solicitud quedó {outcome.type} en la tanda.", "PROVEEDOR")
+    return results
 
-    request = {**payload, "usage": {"include": True}}
-    fallbacks = [m.strip() for m in settings.OPENROUTER_FALLBACK_MODELS.split(",") if m.strip()]
-    if fallbacks:
-        request["models"] = [model, *fallbacks]
 
-    started = time.monotonic()
-    total_attempts = 0
-    # Una respuesta mal formada (sin JSON) suele ser pasajera: se vuelve a pedir
-    format_attempts = max(1, settings.OPENROUTER_MAX_RETRIES + 1)
-    for attempt in range(format_attempts):
-        body, attempts = _post_with_retries(request)
-        total_attempts += attempts
-        try:
-            data = _parse_json(_message_text(body["choices"][0]["message"]["content"]))
-            if not isinstance(data, dict):
-                raise ValueError("la respuesta no es un objeto JSON")
-            parsed = parse(data)
+def run(requests: list[AIRequest], progress: Callable[[str], None] | None = None) -> dict[str, AIResult | AIError]:
+    """Resuelve las solicitudes (caché o Claude). Devuelve, por `key`, el resultado o el AIError de
+    esa solicitud. Lanza AIError si no se puede usar la API (sin clave, clave rechazada, sin saldo)."""
+    progress = progress or (lambda _text: None)
+    results: dict[str, AIResult | AIError] = {}
+    pending: list[tuple[AIRequest, dict]] = []
+    for request in requests:
+        params = _params(request)
+        cache_file = _cache_path(request, params)
+        if settings.AI_CACHE_ENABLED and cache_file.is_file():
+            cached = json.loads(cache_file.read_text(encoding="utf-8"))
+            try:
+                results[request.key] = AIResult(
+                    data=cached["data"], parsed=request.parse(cached["data"]), model=cached["model"], cached=True
+                )
+                continue
+            except (ValueError, KeyError, TypeError):
+                pass  # la validación cambió y la respuesta guardada ya no sirve: se vuelve a pedir
+        pending.append((request, params))
+    if not pending:
+        return results
+    if not settings.CLAUDE_KEY:
+        raise AIError("Falta CLAUDE_KEY en el archivo .env; los agentes no pueden leer documentos.", "SIN_CLAVE")
+
+    client = _client()
+    # Una respuesta incompleta o mal formada se vuelve a pedir (en una tanda nueva)
+    for attempt in range(settings.AI_FORMAT_RETRIES + 1):
+        answered = (_run_batch if settings.AI_BATCH else _run_direct)(client, pending, progress)
+        retry = []
+        for request, params in pending:
+            outcome = answered[request.key]
+            if isinstance(outcome, AIError) and outcome.code == "FORMATO" and attempt < settings.AI_FORMAT_RETRIES:
+                retry.append((request, params))
+                continue
+            results[request.key] = outcome
+            if isinstance(outcome, AIResult) and settings.AI_CACHE_ENABLED:
+                cache_file = _cache_path(request, params)
+                cache_file.parent.mkdir(parents=True, exist_ok=True)
+                cache_file.write_text(json.dumps({"model": outcome.model, "data": outcome.data}, ensure_ascii=False), encoding="utf-8")
+        if not retry:
             break
-        except (KeyError, IndexError, TypeError, ValueError) as exc:
-            if attempt == format_attempts - 1:
-                raise AIError(f"Respuesta del modelo con formato inválido tras {format_attempts} intentos: {exc}", "FORMATO") from exc
-
-    usage = body.get("usage") or {}
-    cost = usage.get("cost")
-    result = AIResult(
-        data=data,
-        parsed=parsed,
-        model=body.get("model", model),
-        attempts=total_attempts,
-        duration_ms=int((time.monotonic() - started) * 1000),
-        cost_usd=Decimal(str(cost)) if cost is not None else None,
-        usage=usage,
-    )
-    if settings.AI_CACHE_ENABLED:
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        cache_file.write_text(json.dumps({"model": result.model, "data": data}, ensure_ascii=False), encoding="utf-8")
-    return result
+        pending = retry
+    return results

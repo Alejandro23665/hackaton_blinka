@@ -5,8 +5,12 @@ Estas clases solo sirven para leer y escribir desde Python: las tablas, sus regl
 """
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Column, Computed
+from sqlalchemy import ARRAY, Boolean, Column, Computed, Text
 from sqlmodel import Field, SQLModel
+
+
+# Rol del usuario que representa a la IA (db/005): sus documentos no los revisó una persona
+MODEL_ROLE = "MODELO"
 
 
 class Rol(SQLModel, table=True):
@@ -33,7 +37,6 @@ class TipoDocumento(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     documento: str  # FC, CI o GD
-    descripcion: str
 
 
 class DocumentoProcesado(SQLModel, table=True):
@@ -51,8 +54,17 @@ class DocumentoProcesado(SQLModel, table=True):
     observaciones: str  # LEGIBLE, NO_LEGIBLE o DESCUADRE
     id_tipo_documento: int = Field(foreign_key="tipos_documentos.id")
     imagen: str  # clave del archivo original en el almacenamiento
+    # El "Modelo IA" si lo procesó la IA; la persona que lo corrigió, si alguien intervino
+    id_usuario: int = Field(foreign_key="usuarios.id")
+    # Nombres de columna de los campos con problemas: no se leyeron / se leyeron sin seguridad
+    campos_faltantes: list[str] = Field(default_factory=list, sa_column=Column(ARRAY(Text), nullable=False))
+    campos_dudosos: list[str] = Field(default_factory=list, sa_column=Column(ARRAY(Text), nullable=False))
+    revisado_en: datetime | None = None  # cuándo lo revisó una persona
     creado_en: datetime | None = Field(default=None, sa_column_kwargs={"server_default": "now()"})
-    # La calcula la base (observaciones <> 'LEGIBLE'): nunca se escribe desde aquí
+    # La calcula la base: nunca se escribe desde aquí
     requiere_revision: bool | None = Field(
-        default=None, sa_column=Column(Boolean, Computed("observaciones <> 'LEGIBLE'", persisted=True))
+        default=None,
+        sa_column=Column(
+            Boolean, Computed("observaciones <> 'LEGIBLE' AND revisado_en IS NULL", persisted=True)
+        ),
     )

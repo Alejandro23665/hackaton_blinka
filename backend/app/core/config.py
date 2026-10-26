@@ -14,10 +14,14 @@ class Settings(BaseSettings):
     # Orígenes del frontend que pueden llamar a la API (en producción el frontend es el mismo origen)
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]
 
-    # Despliegue: frontend compilado que sirve FastAPI y contraseña de acceso opcional
+    # Despliegue: frontend compilado que sirve FastAPI
     FRONTEND_DIST: Path | None = BACKEND_DIR.parent / "frontend" / "dist"
-    ACCESS_USER: str = "blinka"
-    ACCESS_PASSWORD: str | None = None
+
+    # Sesiones (inicio de sesión con la tabla usuarios). Sin SECRET_KEY, se cierran al reiniciar
+    SECRET_KEY: str | None = None
+    SESSION_HOURS: int = 12
+    # Zona horaria del "día" del dashboard
+    TIMEZONE: str = "America/Santiago"
 
     # Archivos originales e imágenes de páginas (en producción, un volumen persistente)
     STORAGE_DIR: Path = BACKEND_DIR / "storage"
@@ -36,25 +40,27 @@ class Settings(BaseSettings):
     CLASSIFICATION_MIN_CONFIDENCE: float = 0.7
     FIELD_MIN_CONFIDENCE: float = 0.8
 
-    # Lectura con OpenRouter (API compatible con OpenAI)
-    OPENROUTER_API_KEY: str | None = None
-    OPENROUTER_MODEL: str = "nvidia/nemotron-3.5-super-vl:free"
-    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
-    OPENROUTER_TIMEOUT_S: float = 90
-    # Reintentos ante errores pasajeros (502, 503, 429…), con espera de 1 s, 2 s, 4 s…
-    OPENROUTER_MAX_RETRIES: int = 2
-    # Modelos de respaldo separados por coma; OpenRouter los usa si el principal falla
-    OPENROUTER_FALLBACK_MODELS: str = ""
-    # Modelo de cada agente; vacío = OPENROUTER_MODEL
+    # Lectura con Claude (API de Anthropic). La clave va en CLAUDE_KEY
+    CLAUDE_KEY: str | None = None
+    AI_MODEL: str = "claude-haiku-5-5"
+    # Modelo de cada agente; vacío = AI_MODEL
     SEGMENTER_MODEL: str | None = None
     EXTRACTOR_MODEL: str | None = None
-    # Razonamiento interno del modelo (parámetro "reasoning" de OpenRouter), por ejemplo
-    # {"effort": "low"} o {"enabled": false}. Vacío = lo que el modelo haga por defecto.
-    OPENROUTER_REASONING: dict | None = None
+    # Esfuerzo de razonamiento del modelo (low, medium, high, xhigh, max). Más esfuerzo: más tokens
+    AI_EFFORT: str = "medium"
+    # Tope de tokens de cada respuesta (incluye el razonamiento interno del modelo)
+    AI_MAX_TOKENS: int = 16000
+    # Message Batches API: mitad de precio, respuesta asíncrona (la mayoría en menos de una hora,
+    # máximo 24 h). false = una llamada por solicitud (más rápido para probar)
+    AI_BATCH: bool = True
+    AI_BATCH_POLL_S: float = 10
+    AI_BATCH_MAX_WAIT_S: float = 24 * 3600
+    # Reintentos del SDK ante errores pasajeros (429, 5xx, red) y de respuestas incompletas
+    AI_MAX_RETRIES: int = 2
+    AI_FORMAT_RETRIES: int = 1
     # Segunda lectura independiente de cada documento: los campos en que no coincide quedan ILEGIBLE.
-    # Detecta datos "adivinados" (la confianza que declara el modelo no lo hace). Duplica las llamadas.
+    # Detecta datos "adivinados" (la confianza que declara el modelo no lo hace). Duplica las lecturas.
     EXTRACTION_VERIFY: bool = True
-    VERIFY_TEMPERATURE: float = 0.8
 
     # Caché de respuestas de la IA en disco: repetir una llamada idéntica (misma imagen, mismas
     # instrucciones, mismo modelo) no gasta cuota. Se comparte entre bases de datos.

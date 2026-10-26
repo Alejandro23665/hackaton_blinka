@@ -15,6 +15,7 @@ Diseño en [docs/01-diseno.md](docs/01-diseno.md).
 | 5.5 | Evaluación con muestras reales | En curso (58 imágenes) |
 | R1 | Base de datos desde cero (4 tablas, `db/*.sql`) y backend adaptado | Hecha |
 | R2 | Interfaz adaptada a la base nueva | Hecha |
+| R3 | Inicio de sesión, dashboard del día y revisión humana (corrección a nombre del usuario) | Hecha |
 | 5.7 | Despliegue | Pendiente |
 
 ## Base de datos
@@ -23,14 +24,16 @@ Se define **solo** con los archivos SQL de [`db/`](db/), que se aplican en orden
 
 | Tabla | Qué guarda |
 |---|---|
-| `roles` | Roles de la aplicación |
-| `usuarios` | Nombre, email (único), hash de la contraseña y rol |
-| `tipos_documentos` | Solo 3 registros: FC (factura electrónica), CI (control interno), GD (guía de despacho) |
-| `documentos_procesados` | Una fila por documento: RUT del proveedor, folio, fecha, firma, neto, IVA, impuestos (otros impuestos + exento), total, observaciones (`LEGIBLE`, `NO_LEGIBLE`, `DESCUADRE`), `requiere_revision` (se calcula sola), tipo e imagen original |
+| `roles` | `MODELO` (solo el usuario de la IA), `REVISOR` y `ADMINISTRADOR` |
+| `usuarios` | Nombre, email (único), hash de la contraseña y rol. Incluye el usuario "Modelo IA", que no puede iniciar sesión |
+| `tipos_documentos` | `id` y `documento`, con solo 3 registros: FC (factura electrónica), CI (control interno), GD (guía de despacho) |
+| `documentos_procesados` | Una fila por documento: RUT del proveedor, folio, fecha, firma, neto, IVA, impuestos (otros impuestos + exento), total, observaciones (`LEGIBLE`, `NO_LEGIBLE`, `DESCUADRE`), tipo, imagen original, `id_usuario` (el Modelo IA o la persona que lo corrigió), `campos_faltantes` y `campos_dudosos`, `revisado_en` y `requiere_revision` (se calcula sola: no legible o descuadre, y nadie lo ha revisado) |
 
 - Los documentos desconocidos (boletas, notas de crédito…) se descartan: no se guardan.
 - El mismo documento (tipo, RUT y folio) no se guarda dos veces; no aplica al RUT ilegible `1-9`.
 - Todo el sistema es del proyecto Oxxo: no hay tabla de proyectos.
+- Un documento corregido por una persona queda a su nombre y sale de la cola de revisión; si el
+  documento trae un descuadre real, la persona lo confirma y queda `DESCUADRE` revisado.
 
 ```bash
 python -m app.db.schema               # crea las tablas si la base está vacía
@@ -49,13 +52,15 @@ hackaton_blinka/
 │   │   ├── core/config.py    # Configuración (.env)
 │   │   ├── models.py         # Las 4 tablas (para leer y escribir; no las crea)
 │   │   ├── db/schema.py      # Aplica db/*.sql
-│   │   ├── ai/client.py      # OpenRouter: reintentos, JSON estricto y caché de respuestas
+│   │   ├── auth.py           # Contraseñas (scrypt) y sesiones (token firmado)
+│   │   ├── usuarios.py       # Alta de usuarios desde la terminal
+│   │   ├── ai/client.py      # Claude (Haiku 5.5): tandas de Message Batches, JSON con esquema y caché
 │   │   ├── pipeline/         # preprocess, segmenter (IA), grouper, extractor (IA), normalize,
 │   │   │                     # validate, process (guarda la fila), jobs (avance en memoria)
 │   │   ├── storage.py        # Almacenamiento de archivos
-│   │   └── api/              # trabajos, documentos
+│   │   └── api/              # auth, trabajos, documentos
 │   └── tests/
-└── frontend/                 # React + Vite + Tailwind: Subir, Documentos y detalle
+└── frontend/                 # React + Vite + Tailwind: inicio de sesión, Inicio, Subir, Revisión y Documentos
 ```
 
 ## Puesta en marcha
@@ -69,8 +74,12 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows  (Linux/Mac: source .venv/bin/activate)
 pip install -r requirements-dev.txt
 python -m app.db.schema
+python -m app.usuarios crear     # tu usuario (pide nombre, email, rol y contraseña)
 uvicorn app.main:app --reload    # http://localhost:8000/docs
 ```
+
+Define `SECRET_KEY` en `.env` (cualquier texto largo y secreto): sin ella las sesiones se cierran
+cada vez que se reinicia el servidor.
 
 En otra terminal:
 
@@ -80,21 +89,32 @@ npm install
 npm run dev                      # http://localhost:5173
 ```
 
-**Interfaz:** *Subir* (imágenes o PDF y el avance de cada trabajo: documentos guardados,
-descartados, duplicados o con error), *Documentos* (totales, filtros por tipo, observaciones y
-"requieren revisión", búsqueda por RUT o folio) y el detalle de cada documento (archivo original con
-zoom, datos guardados y suma de montos).
+**Interfaz** (pide iniciar sesión):
+- *Inicio:* el día (hoy o el que se elija) con los documentos subidos, los procesados por la IA,
+  los que requieren revisión humana y los revisados por una persona.
+- *Subir:* imágenes o PDF y el avance de cada trabajo (guardado, descartado, duplicado o error).
+- *Revisión:* los pendientes, los más antiguos primero. Al abrir uno: la imagen a la izquierda y a
+  la derecha el formulario con lo que leyó la IA, los campos que faltan (rojo) y los dudosos
+  (ámbar), y la suma de montos en vivo. Al guardar pasa al siguiente pendiente.
+- *Documentos:* totales, filtros por tipo, observaciones y "requieren revisión", búsqueda por RUT o
+  folio, y el detalle de cada documento (quién lo procesó o revisó).
 
 ## API
 
+Todas las rutas, salvo `/health` y `/auth/login`, piden `Authorization: Bearer <token>`.
+
 | Método | Ruta | Qué hace |
 |---|---|---|
+| POST | `/auth/login` | Email y contraseña → token de sesión y datos del usuario |
+| GET | `/auth/yo` | El usuario de la sesión |
 | POST | `/trabajos` | Sube imágenes o PDF (`files`). Responde al instante con el trabajo y procesa en segundo plano, de a un trabajo por vez |
 | GET | `/trabajos` | Trabajos recientes (desde que arrancó el servidor) |
 | GET | `/trabajos/{id}` | Avance: estado de cada archivo y qué pasó con cada documento (guardado, descartado, duplicado o error) |
-| GET | `/documentos` | Documentos, los más recientes primero. Filtros: `tipo`, `observaciones`, `requiere_revision`, `q` (RUT o folio), `limite`, `desde` |
+| GET | `/documentos` | Documentos (`orden`: `recientes` o `antiguos`). Filtros: `tipo`, `observaciones`, `requiere_revision`, `q` (RUT o folio), `limite`, `desde` |
 | GET | `/documentos/resumen` | Totales por observaciones y por tipo, y cuántos requieren revisión |
+| GET | `/documentos/dia` | Totales de un día (`fecha`, por defecto hoy en `TIMEZONE`): subidos, procesados por la IA, pendientes y revisados |
 | GET | `/documentos/{id}` | Un documento |
+| PUT | `/documentos/{id}/correccion` | Una persona corrige o confirma los datos. Valida RUT y suma; un descuadre se guarda solo con `confirmar_descuadre` |
 | GET | `/documentos/{id}/imagen` | El archivo original del que salió |
 | GET | `/tipos-documentos` | FC, CI y GD |
 

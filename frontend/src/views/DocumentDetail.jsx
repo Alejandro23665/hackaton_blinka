@@ -1,55 +1,9 @@
-import { useState } from 'react'
 import { api } from '../api'
+import DocumentViewer from '../components/DocumentViewer'
 import Icon from '../components/icons'
-import { Card, ErrorBox, Eyebrow, Loading, Segmented, StatusBadge, Tag, Tile } from '../components/ui'
+import { Button, Card, ErrorBox, Eyebrow, Loading, StatusBadge, Tag, Tile } from '../components/ui'
 import { DOC_TYPES, REVIEW_REASONS, clp, dateTime, rut, shortDate } from '../format'
 import { href, useLoad } from '../hooks'
-
-/** El archivo original: imagen (con zoom para revisarla) o PDF. */
-function Viewer({ doc }) {
-  const [zoom, setZoom] = useState(1)
-  const url = api.imageUrl(doc.id)
-  const isPdf = doc.imagen.toLowerCase().endsWith('.pdf')
-
-  return (
-    <Card
-      title="Documento original"
-      subtitle={isPdf ? 'PDF' : 'Imagen tal como se subió'}
-      action={
-        <div className="flex items-center gap-3">
-          {!isPdf && (
-            <Segmented
-              size="sm"
-              value={zoom}
-              onChange={setZoom}
-              options={[
-                { value: 1, label: 'Ajustar' },
-                { value: 2, label: '200 %' },
-                { value: 3, label: '300 %' },
-              ]}
-            />
-          )}
-          <a
-            href={url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 text-[13px] font-medium text-brand-700 hover:underline"
-          >
-            Abrir <Icon name="external" size={14} />
-          </a>
-        </div>
-      }
-    >
-      {isPdf ? (
-        <iframe src={url} title="Documento original" className="h-[75vh] w-full rounded-control border border-line" />
-      ) : (
-        <div className="max-h-[75vh] overflow-auto rounded-control border border-line bg-surface">
-          <img src={url} alt="Documento original" className="block h-auto max-w-none" style={{ width: `${zoom * 100}%` }} />
-        </div>
-      )}
-    </Card>
-  )
-}
 
 /** neto + IVA + impuestos = calculado, frente al total guardado. */
 function Sum({ doc }) {
@@ -116,16 +70,28 @@ export default function DocumentDetail({ id }) {
 
   return (
     <div className="space-y-6">
-      <div>
-        <a href={href('documentos')} className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-brand-700">
-          <Icon name="arrowLeft" size={14} /> Documentos
-        </a>
-        <h2 className="mt-1 flex flex-wrap items-center gap-3 text-xl font-semibold tracking-tight">
-          {DOC_TYPES[d.tipo]}
-          {d.folio && <span className="tabular text-muted">N° {d.folio}</span>}
-          <StatusBadge status={d.observaciones} />
-        </h2>
-        <p className="mt-1 text-xs text-subtle">Guardado el {dateTime(d.creado_en)} · id {d.id}</p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <a href={href('documentos')} className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-brand-700">
+            <Icon name="arrowLeft" size={14} /> Documentos
+          </a>
+          <h2 className="mt-1 flex flex-wrap items-center gap-3 text-xl font-semibold tracking-tight">
+            {DOC_TYPES[d.tipo]}
+            {d.folio && <span className="tabular text-muted">N° {d.folio}</span>}
+            <StatusBadge status={d.observaciones} />
+          </h2>
+          <p className="mt-1 text-xs text-subtle">
+            Guardado el {dateTime(d.creado_en)} · id {d.id} ·{' '}
+            {d.revisado_en ? `revisado por ${d.usuario} el ${dateTime(d.revisado_en)}` : `procesado por ${d.usuario}`}
+          </p>
+        </div>
+        <Button
+          variant={d.requiere_revision ? 'primary' : 'secondary'}
+          icon="pencil"
+          onClick={() => (window.location.hash = href('revision', d.id))}
+        >
+          {d.requiere_revision ? 'Revisar y corregir' : 'Corregir'}
+        </Button>
       </div>
 
       {d.requiere_revision && (
@@ -140,7 +106,7 @@ export default function DocumentDetail({ id }) {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,6fr)_minmax(0,5fr)]">
         <div className="lg:sticky lg:top-24 lg:self-start">
-          <Viewer doc={d} />
+          <DocumentViewer id={d.id} />
         </div>
 
         <div className="space-y-6">

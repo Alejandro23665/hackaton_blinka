@@ -1,17 +1,12 @@
-"""Segmentador (comprobaciones del código), agrupador y cliente de IA. Sin base de datos ni red."""
+"""Segmentador (comprobaciones del código) y agrupador. Sin base de datos ni red."""
 import uuid
 
-import httpx
 import pytest
 
-from app.ai import client as ai
 from app.core.config import settings
 from app.pipeline.grouper import group_pages
 from app.pipeline.segmenter import PageAnalysis, Region, clean_region, normalize_number, verify_type
 from tests.factories import detected, page_response
-
-# El cliente real, guardado antes de que el FakeAI de conftest lo sustituya en cada test
-REAL_CALL_JSON = ai.call_json
 
 # --- Comprobación del tipo propuesto por la IA ---------------------------------------------
 
@@ -128,94 +123,3 @@ def test_only_first_document_of_a_page_can_continue():
 def test_low_quality_page_adds_warning():
     (doc,) = group_pages(_pages(page_response(detected(), quality="BAJA", issues=["borrosa"])))
     assert doc.issues[0]["code"] == "BAJA_CALIDAD_IMAGEN" and "borrosa" in doc.issues[0]["message"]
-
-
-# --- Cliente de IA (red simulada) -------------------------------------------------------------
-
-
-class FakeResponse:
-    def __init__(self, status_code, body):
-        self.status_code = status_code
-        self._body = body
-        self.headers = {"content-type": "application/json"}
-        self.text = str(body)
-
-    def json(self):
-        return self._body
-
-
-def _ok(content: str, cost=0.0):
-    return FakeResponse(200, {"model": "m", "choices": [{"message": {"content": content}}], "usage": {"cost": cost}})
-
-
-@pytest.fixture
-def real_client(monkeypatch):
-    """El cliente real (sin el FakeAI de conftest), con httpx.post simulado y sin esperas."""
-    module = ai
-    monkeypatch.setattr(module, "call_json", REAL_CALL_JSON)
-    monkeypatch.setattr(module.time, "sleep", lambda _: None)
-    responses: list = []
-    calls: list = []
-
-    def post(url, json, headers, timeout):
-        calls.append(json)
-        item = responses.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return item
-
-    monkeypatch.setattr(module.httpx, "post", post)
-    return module, responses, calls
-
-
-def _call(module):
-    return module.call_json(
-        system="s", content=[module.text_part("t")], schema={}, schema_name="x", model="m", parse=lambda d: d["v"]
-    )
-
-
-def test_identical_call_uses_cache(real_client):
-    module, responses, calls = real_client
-    responses.append(_ok('{"v": 1}', cost=0.002))
-    first = _call(module)
-    second = _call(module)
-    assert (first.parsed, first.cached, str(first.cost_usd)) == (1, False, "0.002")
-    assert (second.parsed, second.cached) == (1, True)
-    assert len(calls) == 1
-
-
-def test_bad_format_is_retried_and_never_cached(real_client):
-    module, responses, calls = real_client
-    responses.extend([_ok("no es json"), _ok('{"otro": 1}'), _ok('```json\n{"v": 2}\n```')])
-    assert _call(module).parsed == 2 and len(calls) == 3
-
-
-def test_daily_quota_is_not_retried(real_client):
-    module, responses, calls = real_client
-    responses.append(FakeResponse(429, {"error": {"message": "Rate limit exceeded: free-models-per-day"}}))
-    with pytest.raises(module.AIError) as exc:
-        _call(module)
-    assert exc.value.code == "CUOTA" and len(calls) == 1
-
-
-def test_transient_errors_are_retried(real_client):
-    module, responses, calls = real_client
-    responses.extend([FakeResponse(503, {"error": {"message": "ocupado"}}), httpx.ConnectError("x"), _ok('{"v": 3}')])
-    result = _call(module)
-    assert result.parsed == 3 and result.attempts == 3
-
-
-def test_missing_key(real_client, monkeypatch):
-    module, _, _ = real_client
-    monkeypatch.setattr(settings, "OPENROUTER_API_KEY", None)
-    with pytest.raises(module.AIError) as exc:
-        _call(module)
-    assert exc.value.code == "SIN_CLAVE"
-
-
-def test_rejected_key_is_not_retried(real_client):
-    module, responses, calls = real_client
-    responses.append(FakeResponse(401, {"error": {"message": "User not found."}}))
-    with pytest.raises(module.AIError) as exc:
-        _call(module)
-    assert exc.value.code == "CLAVE" and "OPENROUTER_API_KEY" in str(exc.value) and len(calls) == 1

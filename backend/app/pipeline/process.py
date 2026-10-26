@@ -1,42 +1,61 @@
-"""Procesamiento de un archivo (imagen o PDF) hasta documentos_procesados.
+"""Procesamiento de archivos (imágenes o PDF) hasta documentos_procesados.
 
 Pasos: páginas → [IA] segmentar y clasificar cada página → agrupar en documentos → en cada
 documento admitido, [IA] dos lecturas independientes → normalizar → validar → una fila en
 documentos_procesados.
 
+Las llamadas a la IA van en tandas (Message Batches): una con las páginas de todos los archivos (en
+un PDF, una ronda por número de página, porque cada página necesita saber cómo terminó la anterior)
+y otra con las dos lecturas de todos los documentos.
+
 - Los documentos desconocidos se descartan: no se guardan.
 - Un documento ya guardado (mismo tipo, RUT y folio) no se repite: la base lo rechaza.
 - "La IA lee, el código decide": normalizar, sumar y fijar observaciones lo hace código probado.
+- Cada fila queda a nombre del usuario "Modelo IA" y con los campos que faltan o tienen dudas, para
+  que una persona los corrija en la revisión.
 """
 import logging
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
+from app.ai import client
 from app.ai.client import AIError
 from app.core.config import settings
-from app.models import DocumentoProcesado, TipoDocumento
+from app.models import MODEL_ROLE, DocumentoProcesado, Rol, TipoDocumento, Usuario
 from app.pipeline import extractor, segmenter
 from app.pipeline.grouper import GroupedDocument, group_pages
 from app.pipeline.normalize import Normalized, normalize_extraction, split_tax_lines
-from app.pipeline.preprocess import RenderedPage, render_pages
-from app.pipeline.validate import Validation, validate
+from app.pipeline.preprocess import PreprocessError, RenderedPage, render_pages
+from app.pipeline.validate import OPTIONAL_AMOUNTS, Validation, required_fields, validate
 from app.storage import get_storage
 
 # Tipo que detecta la IA → código de tipos_documentos
 TYPE_CODES = {"FACTURA_ELECTRONICA": "FC", "CONTROL_INTERNO": "CI", "GUIA_DESPACHO": "GD"}
 # Estado del validador → observaciones
 OBSERVATIONS = {"PROCESADO": "LEGIBLE", "NO_LEGIBLE": "NO_LEGIBLE", "DESCUADRE": "DESCUADRE"}
-# Errores de la IA que no se arreglan reintentando el siguiente documento
-STOP_CODES = ("CUOTA", "SIN_CLAVE", "CLAVE")
+# Campo del extractor → columna de documentos_procesados (otros impuestos y exento van juntos)
+COLUMN_OF = {
+    "PROVIDER_RUT": "rut_proveedor",
+    "DOCUMENT_NUMBER": "folio",
+    "ISSUE_DATE": "fecha",
+    "NET_AMOUNT": "total_neto",
+    "VAT_AMOUNT": "iva",
+    "OTHER_TAXES_AMOUNT": "impuestos",
+    "EXEMPT_AMOUNT": "impuestos",
+    "TOTAL_AMOUNT": "total",
+}
+# Orden en que se listan los campos con problemas
+COLUMNS = ("rut_proveedor", "folio", "fecha", "firma", "total_neto", "iva", "impuestos", "total")
 
 logger = logging.getLogger(__name__)
 
 
-class QuotaExhausted(Exception):
-    """Se agotó la cuota de la IA (o falta la clave): no tiene sentido seguir con el resto."""
+class AIUnavailable(Exception):
+    """No se puede usar la IA (falta la clave, fue rechazada, sin saldo…): no tiene sentido seguir."""
 
 
 @dataclass
@@ -47,6 +66,7 @@ class Reading:
     normalized: Normalized
     validation: Validation
     signed: bool
+    signature_doubtful: bool = False  # una lectura vio la firma y la otra no
 
 
 @dataclass
@@ -59,6 +79,18 @@ class DocumentResult:
     folio: str | None = None
     observaciones: str | None = None
     mensaje: str | None = None
+
+
+@dataclass
+class FileInput:
+    imagen: str  # clave del original en el almacenamiento
+    tipo_contenido: str
+
+
+@dataclass
+class FileOutcome:
+    documentos: list[DocumentResult] = field(default_factory=list)
+    error: str | None = None  # el archivo no se pudo procesar
 
 
 # --- Lectura (IA + código, sin base de datos) -----------------------------------------------
@@ -74,13 +106,9 @@ def _readings(extraction: extractor.Extraction) -> dict[str, dict]:
     return readings
 
 
-def read_document(doc_type: str, images: list[tuple[bytes, str]]) -> Reading:
-    """Dos lecturas independientes, normalización y validación. Lanza AIError si la IA falla:
-    sin la segunda lectura no se aceptan los datos."""
-    first: extractor.Extraction = extractor.extract_document(doc_type, images, temperature=0).parsed
-    second = None
-    if settings.EXTRACTION_VERIFY:
-        second = extractor.extract_document(doc_type, images, temperature=settings.VERIFY_TEMPERATURE).parsed
+def build_reading(doc_type: str, first: extractor.Extraction, second: extractor.Extraction | None) -> Reading:
+    """Normaliza y valida las dos lecturas independientes de un documento (la segunda falta si
+    EXTRACTION_VERIFY está apagado)."""
     normalized = normalize_extraction(_readings(first), _readings(second) if second else None)
     values = {name: item.value for name, item in normalized.fields.items()}
     if normalized.rut_is_substitute:
@@ -93,7 +121,36 @@ def read_document(doc_type: str, images: list[tuple[bytes, str]]) -> Reading:
     )
     # Firmado solo si las dos lecturas ven la firma: dar por recibido algo sin firma es peor
     signed = first.signature.present and (second is None or second.signature.present)
-    return Reading(doc_type, normalized, validation, signed)
+    doubtful = second is not None and first.signature.present != second.signature.present
+    return Reading(doc_type, normalized, validation, signed, doubtful)
+
+
+def field_problems(reading: Reading) -> tuple[list[str], list[str]]:
+    """Columnas que faltan (no se leyeron) y con dudas (se leyó algo, pero no es fiable).
+
+    - Falta: un obligatorio ausente, o ilegible sin ningún texto leído.
+    - Duda: ilegible con texto (confianza baja, las dos lecturas no coinciden, formato raro), los
+      montos de un descuadre y la firma si una lectura la vio y la otra no.
+    - Un opcional ilegible que se dedujo en 0 (los demás montos ya suman el total) no es problema.
+    """
+    fields = reading.normalized.fields
+    required = required_fields(reading.doc_type, {name: f.status for name, f in fields.items()})
+    deduced = {i["field_name"] for i in reading.validation.issues if i["code"] == "OPCIONAL_DEDUCIDO"}
+    missing, doubtful = set(), set()
+    for name, item in fields.items():
+        column = COLUMN_OF[name]
+        if item.status == "ILEGIBLE" and name not in deduced:
+            (doubtful if item.raw_text else missing).add(column)
+        elif item.status == "AUSENTE" and name in required:
+            missing.add(column)
+    if reading.validation.validation_status == "DESCUADRE":
+        doubtful |= {"total_neto", "iva", "total"}
+        if any(reading.validation.amounts[name] is not None for name in OPTIONAL_AMOUNTS):
+            doubtful.add("impuestos")
+    if reading.signature_doubtful:
+        doubtful.add("firma")
+    doubtful -= missing
+    return [c for c in COLUMNS if c in missing], [c for c in COLUMNS if c in doubtful]
 
 
 def row_values(reading: Reading) -> dict:
@@ -110,6 +167,7 @@ def row_values(reading: Reading) -> dict:
 
     other, exempt = amounts["OTHER_TAXES_AMOUNT"], amounts["EXEMPT_AMOUNT"]
     fields = reading.normalized.fields
+    missing, doubtful = field_problems(reading)
     return {
         "rut_proveedor": reading.normalized.provider_rut,
         "folio": fields["DOCUMENT_NUMBER"].value,
@@ -121,6 +179,8 @@ def row_values(reading: Reading) -> dict:
         "iva": whole(amounts["VAT_AMOUNT"]),
         "total": whole(amounts["TOTAL_AMOUNT"]),
         "observaciones": observations,
+        "campos_faltantes": missing,
+        "campos_dudosos": doubtful,
     }
 
 
@@ -131,9 +191,21 @@ def type_ids(session: Session) -> dict[str, int]:
     return {t.documento: t.id for t in session.exec(select(TipoDocumento)).all()}
 
 
+def model_user_id(session: Session) -> int:
+    """El usuario "Modelo IA" (db/005): a su nombre queda lo que procesa la IA."""
+    return session.exec(
+        select(Usuario.id).join(Rol, Rol.id == Usuario.id_rol).where(Rol.rol == MODEL_ROLE).order_by(Usuario.id)
+    ).first()
+
+
 def save(session: Session, reading: Reading, image_key: str) -> DocumentResult:
     code = TYPE_CODES[reading.doc_type]
-    row = DocumentoProcesado(**row_values(reading), id_tipo_documento=type_ids(session)[code], imagen=image_key)
+    row = DocumentoProcesado(
+        **row_values(reading),
+        id_tipo_documento=type_ids(session)[code],
+        imagen=image_key,
+        id_usuario=model_user_id(session),
+    )
     session.add(row)
     try:
         session.commit()
@@ -149,7 +221,7 @@ def save(session: Session, reading: Reading, image_key: str) -> DocumentResult:
     return DocumentResult(code, "GUARDADO", id=row.id, folio=row.folio, observaciones=row.observaciones)
 
 
-# --- Un archivo completo ----------------------------------------------------------------------
+# --- Archivos completos ----------------------------------------------------------------------
 
 
 def _document_images(document: GroupedDocument, pages: dict[int, RenderedPage]) -> list[tuple[bytes, str]]:
@@ -166,41 +238,93 @@ def _document_images(document: GroupedDocument, pages: dict[int, RenderedPage]) 
     return images
 
 
-def _segment(pages: list[RenderedPage]) -> list[GroupedDocument]:
-    analyses = []
-    previous: str | None = None
-    for page in pages:
-        analysis = segmenter.analyze_page(page.data, page.number, len(pages), previous).parsed
-        analyses.append((page.number, analysis))
-        last = max(analysis.documents, key=lambda d: d.index)
-        previous = segmenter.describe(last.doc_type, last.document_number_seen)
-    return group_pages(analyses)
-
-
-def process_file(session: Session, image_key: str, content_type: str) -> list[DocumentResult]:
-    """Procesa un archivo ya guardado en el almacenamiento. Lanza QuotaExhausted si la IA se queda
-    sin cuota (lo ya guardado se conserva), PreprocessError si el archivo no se puede abrir y
-    AIError si la IA no pudo clasificar una página."""
-    pages = {page.number: page for page in render_pages(get_storage().get(image_key), content_type)}
+def _ask(requests: list[client.AIRequest], progress: Callable[[str], None]) -> dict:
     try:
-        documents = _segment(list(pages.values()))
+        return client.run(requests, progress)
     except AIError as exc:
-        if exc.code in STOP_CODES:
-            raise QuotaExhausted(str(exc)) from exc
-        raise
+        raise AIUnavailable(str(exc)) from exc
 
-    results = []
-    for document in documents:
-        if document.doc_type not in TYPE_CODES:
-            seen = f"título visto: {document.evidence}" if document.evidence else "sin título visible"
-            results.append(DocumentResult("DESCONOCIDO", "DESCARTADO", mensaje=f"No es FC, CI ni GD ({seen})."))
-            continue
+
+def _segment(files: dict[int, dict[int, RenderedPage]], outcomes: list[FileOutcome], progress) -> dict[int, list]:
+    """Clasifica las páginas de todos los archivos. Ronda N: la página N de cada archivo que la tenga."""
+    analyses: dict[int, list] = {index: [] for index in files}
+    previous: dict[int, str | None] = {index: None for index in files}
+    rounds = max((len(pages) for pages in files.values()), default=0)
+    for number in range(1, rounds + 1):
+        requests = {
+            f"p{index}-{number}": (
+                index,
+                segmenter.page_request(f"p{index}-{number}", pages[number].data, number, len(pages), previous[index]),
+            )
+            for index, pages in files.items()
+            if outcomes[index].error is None and number in pages
+        }
+        if not requests:
+            break
+        stage = f"Clasificando páginas (ronda {number} de {rounds})" if rounds > 1 else "Clasificando páginas"
+        results = _ask([request for _, request in requests.values()], lambda text: progress(f"{stage}. {text}"))
+        for key, (index, _) in requests.items():
+            result = results[key]
+            if isinstance(result, AIError):
+                outcomes[index].error = f"No se pudo clasificar la página {number}: {result}"
+                continue
+            analyses[index].append((number, result.parsed))
+            last = max(result.parsed.documents, key=lambda d: d.index)
+            previous[index] = segmenter.describe(last.doc_type, last.document_number_seen)
+    return analyses
+
+
+def process_files(
+    session: Session, files: list[FileInput], progress: Callable[[str], None] | None = None
+) -> list[FileOutcome]:
+    """Procesa archivos ya guardados en el almacenamiento, con las llamadas a la IA en tandas.
+
+    Devuelve, por archivo, qué pasó con cada documento (o por qué no se pudo procesar). Lanza
+    AIUnavailable si no se puede usar la IA.
+    """
+    progress = progress or (lambda _text: None)
+    outcomes = [FileOutcome() for _ in files]
+    storage = get_storage()
+    rendered: dict[int, dict[int, RenderedPage]] = {}
+    for index, item in enumerate(files):
         try:
-            reading = read_document(document.doc_type, _document_images(document, pages))
-        except AIError as exc:
-            if exc.code in STOP_CODES:
-                raise QuotaExhausted(str(exc)) from exc
-            results.append(DocumentResult(TYPE_CODES[document.doc_type], "ERROR", mensaje=str(exc)))
-            continue
-        results.append(save(session, reading, image_key))
-    return results
+            pages = render_pages(storage.get(item.imagen), item.tipo_contenido)
+            rendered[index] = {page.number: page for page in pages}
+        except PreprocessError as exc:
+            outcomes[index].error = str(exc)
+
+    analyses = _segment(rendered, outcomes, progress)
+    documents = {index: group_pages(analyses[index]) for index in rendered if outcomes[index].error is None}
+
+    readings = (1, 2) if settings.EXTRACTION_VERIFY else (1,)
+    requests = [
+        extractor.document_request(
+            f"d{index}-{number}-{reading}", document.doc_type, _document_images(document, rendered[index]), reading
+        )
+        for index, found in documents.items()
+        for number, document in enumerate(found)
+        if document.doc_type in TYPE_CODES
+        for reading in readings
+    ]
+    results = _ask(requests, lambda text: progress(f"Leyendo documentos. {text}")) if requests else {}
+
+    progress("Guardando")
+    for index, found in documents.items():
+        for number, document in enumerate(found):
+            if document.doc_type not in TYPE_CODES:
+                seen = f"título visto: {document.evidence}" if document.evidence else "sin título visible"
+                outcomes[index].documentos.append(
+                    DocumentResult("DESCONOCIDO", "DESCARTADO", mensaje=f"No es FC, CI ni GD ({seen}).")
+                )
+                continue
+            first, second = (results.get(f"d{index}-{number}-{reading}") for reading in (1, 2))
+            # Sin la segunda lectura (si está activada) no se aceptan los datos
+            failed = next((r for r in (first, second) if isinstance(r, AIError)), None)
+            if failed is not None:
+                outcomes[index].documentos.append(
+                    DocumentResult(TYPE_CODES[document.doc_type], "ERROR", mensaje=str(failed))
+                )
+                continue
+            reading = build_reading(document.doc_type, first.parsed, second.parsed if second else None)
+            outcomes[index].documentos.append(save(session, reading, files[index].imagen))
+    return outcomes

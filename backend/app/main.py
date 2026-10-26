@@ -1,16 +1,12 @@
-import base64
-import binascii
-import secrets
-
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
-from app.api import documentos, trabajos
+from app.api import auth, documentos, trabajos
+from app.auth import current_user
 from app.core.config import settings
 
-app = FastAPI(title="Procesamiento de documentos", version="0.3.0")
+app = FastAPI(title="Procesamiento de documentos", version="0.4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,46 +15,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Rutas abiertas aunque haya contraseña: la plataforma de despliegue comprueba /health
-PUBLIC_PATHS = {"/health"}
-
-
-def _authorized(header: str | None) -> bool:
-    if not header or not header.lower().startswith("basic "):
-        return False
-    try:
-        user, _, password = base64.b64decode(header[6:], validate=True).decode("utf-8").partition(":")
-    except (binascii.Error, UnicodeDecodeError):
-        return False
-    # compare_digest: no revela por el tiempo de respuesta cuántos caracteres coinciden
-    return secrets.compare_digest(user, settings.ACCESS_USER) and secrets.compare_digest(
-        password, settings.ACCESS_PASSWORD or ""
-    )
-
-
-@app.middleware("http")
-async def require_password(request: Request, call_next):
-    """Si ACCESS_PASSWORD está definida, la app (página y API) pide usuario y contraseña.
-
-    Autenticación básica del navegador: protege también los enlaces directos (PDF, CSV) sin
-    añadir pantallas de login. Pensada para una demo pública, no como sistema de usuarios.
-    """
-    if (
-        settings.ACCESS_PASSWORD
-        and request.url.path not in PUBLIC_PATHS
-        and request.method != "OPTIONS"
-        and not _authorized(request.headers.get("authorization"))
-    ):
-        return Response(
-            "Acceso restringido",
-            status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="Documentos", charset="UTF-8"'},
-        )
-    return await call_next(request)
-
-
-app.include_router(trabajos.router)
-app.include_router(documentos.router)
+# Todo lo que no es iniciar sesión pide una sesión válida (usuario de la tabla usuarios)
+app.include_router(auth.router)
+app.include_router(trabajos.router, dependencies=[Depends(current_user)])
+app.include_router(documentos.router, dependencies=[Depends(current_user)])
 
 
 @app.get("/health")

@@ -74,3 +74,23 @@ export function fileSize(bytes) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
   return `${(bytes / 1024 / 1024).toLocaleString('es-CL', { maximumFractionDigits: 1 })} MB`
 }
+
+/** "2026-10-25" → "domingo, 25 de octubre de 2026" */
+export function longDate(value) {
+  if (!value) return '—'
+  return new Date(value).toLocaleDateString('es-CL', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
+  })
+}
+
+/** Nombre de cada columna en el formulario de corrección. */
+export const FIELD_LABELS = {
+  rut_proveedor: 'RUT del proveedor',
+  folio: 'Folio',
+  fecha: 'Fecha',
+  firma: 'Firma',
+  total_neto: 'Neto',
+  iva: 'IVA',
+  impuestos: 'Impuestos (otros + exento)',
+  total: 'Total',
+}

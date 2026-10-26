@@ -7,6 +7,12 @@ import { href, useLoad, usePolling } from '../hooks'
 
 const RUNNING = new Set(['EN_COLA', 'EN_PROCESO'])
 
+/** "menos de 1 min", "3 min"… desde un instante. */
+function minutesSince(value) {
+  const minutes = Math.floor((Date.now() - new Date(value).getTime()) / 60000)
+  return minutes < 1 ? 'menos de 1 min' : `${minutes} min`
+}
+
 /** Qué pasó con un documento encontrado en un archivo. Los guardados llevan a su detalle. */
 function DocumentResult({ doc }) {
   const content = (
@@ -49,6 +55,15 @@ function Job({ job }) {
         </span>
         <StatusBadge status={job.estado} size="sm" />
       </div>
+      {job.etapa && (
+        <p className="mt-2 flex items-start gap-2 rounded-control bg-brand-50 px-3 py-2 text-[13px] text-brand-800">
+          <Icon name="refresh" size={15} className="mt-px animate-spin [animation-duration:2s]" />
+          <span>
+            {job.etapa}
+            <span className="text-brand-700/70"> · hace {minutesSince(job.etapa_desde)}</span>
+          </span>
+        </p>
+      )}
       {job.mensaje && <p className="mt-2 text-[13px] text-warning-700">{job.mensaje}</p>}
 
       <ul className="mt-3 space-y-3 border-l-2 border-line pl-4">

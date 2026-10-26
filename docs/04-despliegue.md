@@ -12,10 +12,11 @@ normal del contenedor se borra en cada despliegue.
 | Variable | Obligatoria | Valor |
 |---|---|---|
 | `DATABASE_URL` | Sí | `${{Postgres.DATABASE_URL}}` (referencia a la base del proyecto) |
-| `OPENROUTER_API_KEY` | Sí | Tu clave de OpenRouter |
+| `CLAUDE_KEY` | Sí | Tu clave de la API de Claude (Anthropic) |
 | `STORAGE_DIR` | Sí | Ruta montada del volumen, por ejemplo `/data/storage` |
-| `ACCESS_PASSWORD` | Muy recomendada | Contraseña para entrar (usuario: `blinka`) |
-| `OPENROUTER_MODEL` | No | Por defecto `nvidia/nemotron-3.5-super-vl:free` |
+| `SECRET_KEY` | Sí | Texto largo y secreto que firma las sesiones (sin ella, se cierran en cada reinicio) |
+| `AI_MODEL` | No | Por defecto `claude-haiku-5-5` |
+| `AI_BATCH` | No | `true` (por defecto): Message Batches, mitad de precio y respuesta asíncrona; `false`: una llamada por solicitud |
 | `TOTAL_TOLERANCE_CLP` | No | Diferencia permitida en la suma de montos (por defecto `0`) |
 
 `PORT` lo asigna la plataforma. Al arrancar, si la base está vacía, se crean las tablas con los
@@ -27,8 +28,9 @@ que ya existe.
 1. **New Project → Deploy from GitHub repo**. Railway detecta el `Dockerfile` y `railway.json`.
 2. **+ New → Database → PostgreSQL**.
 3. En el servicio de la app → **Settings → Volumes → Add volume**, montado en `/data`.
-4. En **Variables**: `DATABASE_URL`, `OPENROUTER_API_KEY`, `STORAGE_DIR=/data/storage` y
-   `ACCESS_PASSWORD`.
+4. En **Variables**: `DATABASE_URL`, `CLAUDE_KEY`, `STORAGE_DIR=/data/storage` y
+   `SECRET_KEY`. Después del primer despliegue, crea los usuarios con `python -m app.usuarios crear`
+   (en la consola del servicio).
 5. **Settings → Networking → Generate Domain**.
 
 Comprobar: `https://tu-app/health` → `{"status":"ok"}` y `https://tu-app/docs` (pide la contraseña).
