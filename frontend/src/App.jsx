@@ -8,6 +8,7 @@ import DocumentDetail from './views/DocumentDetail'
 import Documents from './views/Documents'
 import Home from './views/Home'
 import Login from './views/Login'
+import Metrics from './views/Metrics'
 import Review from './views/Review'
 import Upload from './views/Upload'
 
@@ -16,6 +17,7 @@ const TABS = [
   { section: 'subir', label: 'Subir', icon: 'upload' },
   { section: 'revision', label: 'Revisión', icon: 'alert' },
   { section: 'documentos', label: 'Documentos', icon: 'file' },
+  { section: 'metricas', label: 'Métricas', icon: 'chart' },
 ]
 
 function Logo() {
@@ -56,6 +58,7 @@ function View({ section, id }) {
   if (section === 'documentos') return id ? <DocumentDetail id={id} /> : <Documents />
   if (section === 'revision') return id ? <Correct id={id} /> : <Review />
   if (section === 'subir') return <Upload />
+  if (section === 'metricas') return <Metrics />
   return <Home />
 }
 

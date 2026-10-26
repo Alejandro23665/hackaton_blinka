@@ -63,7 +63,9 @@ class FakeAI:
         return self.errors.get(number) or self.pages.get(number, unknown_page())
 
     def __call__(self, requests, progress=None):
-        from app.ai.client import AIError, AIResult
+        from decimal import Decimal
+
+        from app.ai.client import AIError, AIResult, Call
 
         self.batches += 1
         results = {}
@@ -74,7 +76,9 @@ class FakeAI:
             if isinstance(data, Exception):
                 results[request.key] = data
                 continue
-            results[request.key] = AIResult(data=data, parsed=request.parse(data), model="fake/modelo")
+            # Cada respuesta simulada "cuesta" 1.000 tokens de entrada y 500 de salida, en una tanda de 30 s
+            call = Call("fake/modelo", f"lote{self.batches}", 1000, 500, Decimal("0.000175"), 30.0, "OK")
+            results[request.key] = AIResult(data=data, parsed=request.parse(data), model="fake/modelo", calls=[call])
         return results
 
 
@@ -104,7 +108,7 @@ def engine():
 def clean_db(engine):
     # Los tipos, los roles y el usuario "Modelo IA" vienen de los archivos SQL: no se borran
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE documentos_procesados RESTART IDENTITY"))
+        conn.execute(text("TRUNCATE llamadas_ia, documentos_procesados RESTART IDENTITY"))
         conn.execute(text("DELETE FROM usuarios WHERE email <> 'modelo-ia@sistema.local'"))
         conn.execute(text("DELETE FROM roles WHERE rol NOT IN ('MODELO', 'REVISOR', 'ADMINISTRADOR')"))
     return engine

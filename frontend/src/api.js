@@ -78,6 +78,7 @@ export const api = {
       return request('/trabajos', { method: 'POST', body: form })
     },
   },
+  metrics: (dias) => request('/metricas', { params: { dias } }),
   documents: {
     list: (params) => request('/documentos', { params }),
     summary: () => request('/documentos/resumen'),

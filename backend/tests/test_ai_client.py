@@ -19,7 +19,7 @@ def _message(text: str, stop_reason: str = "end_turn"):
         stop_details=SimpleNamespace(category="cyber") if stop_reason == "refusal" else None,
         content=[SimpleNamespace(type="thinking"), SimpleNamespace(type="text", text=text)],
         model="claude-haiku-5-5",
-        usage=None,
+        usage=SimpleNamespace(model_dump=lambda: {"input_tokens": 2000, "output_tokens": 1000}),
     )
 
 
@@ -173,3 +173,14 @@ def test_schema_conversion_drops_unsupported_constraints():
     schema = {"type": "array", "minItems": 1, "items": {"type": "number", "minimum": 0, "maximum": 1}}
     assert ai.claude_schema(schema) == {"type": "array", "items": {"type": "number"}}
     assert json.dumps(ai.claude_schema(SCHEMA))  # sigue siendo JSON serializable
+
+
+def test_each_paid_attempt_is_reported_with_tokens_cost_and_batch(sdk):
+    sdk.answers = {"a": [_message('{"otro": 1}'), _message('{"v": 3, "nota": null}')]}
+    calls = ai.run([_request("a")])["a"].calls
+    # La respuesta inválida también se pagó: cuenta como un intento FORMATO
+    assert [(c.batch_id, c.input_tokens, c.output_tokens, c.outcome) for c in calls] == [
+        ("lote1", 2000, 1000, "FORMATO"), ("lote2", 2000, 1000, "OK"),
+    ]
+    assert str(calls[0].cost_usd) == "0.000350"  # (2.000 × 0,10 + 1.000 × 0,50) / 1M, a mitad de precio
+    assert ai.run([_request("a")])["a"].calls == []  # desde la caché: no se paga

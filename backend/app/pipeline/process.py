@@ -25,7 +25,7 @@ from sqlmodel import Session, select
 from app.ai import client
 from app.ai.client import AIError
 from app.core.config import settings
-from app.models import MODEL_ROLE, DocumentoProcesado, Rol, TipoDocumento, Usuario
+from app.models import MODEL_ROLE, DocumentoProcesado, LlamadaIA, Rol, TipoDocumento, Usuario
 from app.pipeline import extractor, segmenter
 from app.pipeline.grouper import GroupedDocument, group_pages
 from app.pipeline.normalize import Normalized, normalize_extraction, split_tax_lines
@@ -238,6 +238,25 @@ def _document_images(document: GroupedDocument, pages: dict[int, RenderedPage]) 
     return images
 
 
+def record_calls(session: Session, stage: str, outcome, document_id: int | None = None) -> None:
+    """Registra en llamadas_ia los intentos pagados de una solicitud (la caché no tiene ninguno)."""
+    for call in getattr(outcome, "calls", None) or []:
+        session.add(
+            LlamadaIA(
+                etapa=stage,
+                modelo=call.model,
+                id_tanda=call.batch_id,
+                tokens_entrada=call.input_tokens,
+                tokens_salida=call.output_tokens,
+                costo_usd=call.cost_usd,
+                espera_s=Decimal(str(call.wait_s)),
+                resultado=call.outcome if call.outcome in ("OK", "RECHAZO", "FORMATO") else "ERROR",
+                id_documento=document_id,
+            )
+        )
+    session.commit()
+
+
 def _ask(requests: list[client.AIRequest], progress: Callable[[str], None]) -> dict:
     try:
         return client.run(requests, progress)
@@ -245,7 +264,9 @@ def _ask(requests: list[client.AIRequest], progress: Callable[[str], None]) -> d
         raise AIUnavailable(str(exc)) from exc
 
 
-def _segment(files: dict[int, dict[int, RenderedPage]], outcomes: list[FileOutcome], progress) -> dict[int, list]:
+def _segment(
+    session: Session, files: dict[int, dict[int, RenderedPage]], outcomes: list[FileOutcome], progress
+) -> dict[int, list]:
     """Clasifica las páginas de todos los archivos. Ronda N: la página N de cada archivo que la tenga."""
     analyses: dict[int, list] = {index: [] for index in files}
     previous: dict[int, str | None] = {index: None for index in files}
@@ -265,6 +286,7 @@ def _segment(files: dict[int, dict[int, RenderedPage]], outcomes: list[FileOutco
         results = _ask([request for _, request in requests.values()], lambda text: progress(f"{stage}. {text}"))
         for key, (index, _) in requests.items():
             result = results[key]
+            record_calls(session, "CLASIFICACION", result)
             if isinstance(result, AIError):
                 outcomes[index].error = f"No se pudo clasificar la página {number}: {result}"
                 continue
@@ -293,7 +315,7 @@ def process_files(
         except PreprocessError as exc:
             outcomes[index].error = str(exc)
 
-    analyses = _segment(rendered, outcomes, progress)
+    analyses = _segment(session, rendered, outcomes, progress)
     documents = {index: group_pages(analyses[index]) for index in rendered if outcomes[index].error is None}
 
     readings = (1, 2) if settings.EXTRACTION_VERIFY else (1,)
@@ -321,10 +343,11 @@ def process_files(
             # Sin la segunda lectura (si está activada) no se aceptan los datos
             failed = next((r for r in (first, second) if isinstance(r, AIError)), None)
             if failed is not None:
-                outcomes[index].documentos.append(
-                    DocumentResult(TYPE_CODES[document.doc_type], "ERROR", mensaje=str(failed))
-                )
-                continue
-            reading = build_reading(document.doc_type, first.parsed, second.parsed if second else None)
-            outcomes[index].documentos.append(save(session, reading, files[index].imagen))
+                result = DocumentResult(TYPE_CODES[document.doc_type], "ERROR", mensaje=str(failed))
+            else:
+                reading = build_reading(document.doc_type, first.parsed, second.parsed if second else None)
+                result = save(session, reading, files[index].imagen)
+            outcomes[index].documentos.append(result)
+            record_calls(session, "LECTURA_1", first, result.id)
+            record_calls(session, "LECTURA_2", second, result.id)
     return outcomes

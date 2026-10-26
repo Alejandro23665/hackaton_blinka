@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     AI_BATCH: bool = True
     AI_BATCH_POLL_S: float = 10
     AI_BATCH_MAX_WAIT_S: float = 24 * 3600
+    # Precio de AI_MODEL en dólares por millón de tokens (Claude Haiku 5.5 con prompts de hasta 100K
+    # tokens), para estimar el costo en las métricas. En tandas se cobra la mitad
+    AI_PRICE_INPUT_MTOK: float = 0.10
+    AI_PRICE_OUTPUT_MTOK: float = 0.50
     # Reintentos del SDK ante errores pasajeros (429, 5xx, red) y de respuestas incompletas
     AI_MAX_RETRIES: int = 2
     AI_FORMAT_RETRIES: int = 1

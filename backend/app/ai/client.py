@@ -9,6 +9,8 @@
   devuelve la respuesta guardada sin volver a pagarla. Solo se guardan respuestas válidas.
 - Errores: los que afectan a toda la tanda (clave, saldo, límite de uso) se lanzan como AIError;
   los de una solicitud se devuelven como AIError en el resultado de esa solicitud.
+- Cada intento pagado deja un `Call` (tokens, costo estimado, espera) en el resultado, para
+  registrarlo en llamadas_ia. Las respuestas de la caché no tienen ninguno.
 """
 import base64
 import hashlib
@@ -17,6 +19,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
 import anthropic
@@ -32,6 +35,19 @@ MAX_BATCH_REQUESTS = 100_000
 _UNSUPPORTED_SCHEMA_KEYS = {"minItems", "maxItems", "minimum", "maximum", "minLength", "maxLength", "multipleOf"}
 
 
+@dataclass
+class Call:
+    """Un intento pagado de una solicitud: lo que se registra en llamadas_ia."""
+
+    model: str
+    batch_id: str | None
+    input_tokens: int
+    output_tokens: int
+    cost_usd: Decimal
+    wait_s: float
+    outcome: str  # OK, ERROR, RECHAZO o FORMATO
+
+
 class AIError(Exception):
     """Fallo de la IA. code: SIN_CLAVE, CLAVE (rechazada), CUOTA (saldo o límite de uso), PROVEEDOR,
     RECHAZO (Claude se negó) o FORMATO (respuesta incompleta o que no pasa la validación)."""
@@ -39,6 +55,7 @@ class AIError(Exception):
     def __init__(self, message: str, code: str):
         super().__init__(message)
         self.code = code
+        self.calls: list[Call] = []
 
 
 @dataclass
@@ -64,6 +81,29 @@ class AIResult:
     model: str
     cached: bool = False
     usage: dict[str, Any] = field(default_factory=dict)
+    # Intentos pagados (más de uno si una respuesta inválida se volvió a pedir)
+    calls: list[Call] = field(default_factory=list)
+
+
+def estimate_cost(usage: dict, batch: bool) -> Decimal:
+    """Costo en dólares con los precios configurados: la caché se lee a 0,1x y se escribe a 1,25x
+    del precio de entrada; en tandas (Message Batches) todo cuesta la mitad."""
+    price_in, price_out = Decimal(str(settings.AI_PRICE_INPUT_MTOK)), Decimal(str(settings.AI_PRICE_OUTPUT_MTOK))
+    tokens_in = (
+        Decimal(usage.get("input_tokens") or 0) * price_in
+        + Decimal(usage.get("cache_read_input_tokens") or 0) * price_in * Decimal("0.1")
+        + Decimal(usage.get("cache_creation_input_tokens") or 0) * price_in * Decimal("1.25")
+    )
+    cost = (tokens_in + Decimal(usage.get("output_tokens") or 0) * price_out) / Decimal(1_000_000)
+    return (cost / 2 if batch else cost).quantize(Decimal("0.000001"))
+
+
+def _call(model: str, usage: dict, batch_id: str | None, wait_s: float, outcome: str) -> Call:
+    tokens_in = sum(usage.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+    return Call(
+        model=model, batch_id=batch_id, input_tokens=tokens_in, output_tokens=usage.get("output_tokens") or 0,
+        cost_usd=estimate_cost(usage, batch_id is not None), wait_s=wait_s, outcome=outcome,
+    )
 
 
 def image_part(jpeg: bytes) -> dict:
@@ -127,8 +167,18 @@ def _fatal(exc: anthropic.APIError) -> AIError:
     return AIError(f"Error de la API de Claude: {message}", "PROVEEDOR")
 
 
-def _read_message(request: AIRequest, message) -> AIResult | AIError:
-    """El JSON de la respuesta, validado. Un AIError si no sirve."""
+def _read_message(request: AIRequest, message, batch_id: str | None, wait_s: float) -> AIResult | AIError:
+    """El JSON de la respuesta, validado (o un AIError si no sirve), con el intento pagado."""
+    outcome = _interpret(request, message)
+    usage = message.usage.model_dump() if message.usage else {}
+    status = "OK" if isinstance(outcome, AIResult) else outcome.code
+    outcome.calls.append(_call(message.model, usage, batch_id, wait_s, status))
+    if isinstance(outcome, AIResult):
+        outcome.usage = usage
+    return outcome
+
+
+def _interpret(request: AIRequest, message) -> AIResult | AIError:
     if message.stop_reason == "refusal":
         category = getattr(message.stop_details, "category", None) if message.stop_details else None
         return AIError(f"Claude se negó a responder (categoría: {category}).", "RECHAZO")
@@ -142,14 +192,14 @@ def _read_message(request: AIRequest, message) -> AIResult | AIError:
         parsed = request.parse(data)
     except (ValueError, KeyError, TypeError) as exc:  # ValueError incluye los errores de Pydantic
         return AIError(f"La respuesta no tiene la forma esperada: {exc}", "FORMATO")
-    usage = message.usage.model_dump() if message.usage else {}
-    return AIResult(data=data, parsed=parsed, model=message.model, usage=usage)
+    return AIResult(data=data, parsed=parsed, model=message.model)
 
 
 def _run_direct(client: anthropic.Anthropic, pending: list[tuple[AIRequest, dict]], progress) -> dict:
     results = {}
     for number, (request, params) in enumerate(pending, start=1):
         progress(f"Consultando a Claude ({number} de {len(pending)})")
+        started = time.monotonic()
         try:
             message = client.messages.create(**params)
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError, anthropic.RateLimitError) as exc:
@@ -162,7 +212,7 @@ def _run_direct(client: anthropic.Anthropic, pending: list[tuple[AIRequest, dict
         except anthropic.APIConnectionError as exc:
             results[request.key] = AIError(f"No se pudo contactar con Claude: {exc}", "PROVEEDOR")
             continue
-        results[request.key] = _read_message(request, message)
+        results[request.key] = _read_message(request, message, None, round(time.monotonic() - started, 1))
     return results
 
 
@@ -191,7 +241,8 @@ def _run_batch(client: anthropic.Anthropic, pending: list[tuple[AIRequest, dict]
         except anthropic.APIError as exc:
             raise _fatal(exc) from exc
         logger.info("Tanda %s enviada con %d solicitudes", batch.id, len(chunk))
-        deadline = time.monotonic() + settings.AI_BATCH_MAX_WAIT_S
+        started = time.monotonic()
+        deadline = started + settings.AI_BATCH_MAX_WAIT_S
         while batch.processing_status != "ended":
             counts = batch.request_counts
             done = counts.succeeded + counts.errored + counts.canceled + counts.expired
@@ -201,12 +252,13 @@ def _run_batch(client: anthropic.Anthropic, pending: list[tuple[AIRequest, dict]
                 raise AIError(f"La tanda {batch.id} no terminó a tiempo; se canceló.", "PROVEEDOR")
             time.sleep(settings.AI_BATCH_POLL_S)
             batch = client.messages.batches.retrieve(batch.id)
+        wait_s = round(time.monotonic() - started, 1)
         # Los resultados llegan en cualquier orden: se emparejan por custom_id
         for item in client.messages.batches.results(batch.id):
             request = by_key[item.custom_id]
             outcome = item.result
             if outcome.type == "succeeded":
-                results[request.key] = _read_message(request, outcome.message)
+                results[request.key] = _read_message(request, outcome.message, batch.id, wait_s)
             elif outcome.type == "errored":
                 error = outcome.error.error if hasattr(outcome.error, "error") else outcome.error
                 results[request.key] = AIError(f"Claude no procesó la solicitud: {getattr(error, 'message', error)}", "PROVEEDOR")
@@ -241,11 +293,15 @@ def run(requests: list[AIRequest], progress: Callable[[str], None] | None = None
 
     client = _client()
     # Una respuesta incompleta o mal formada se vuelve a pedir (en una tanda nueva)
+    paid: dict[str, list[Call]] = {}
     for attempt in range(settings.AI_FORMAT_RETRIES + 1):
         answered = (_run_batch if settings.AI_BATCH else _run_direct)(client, pending, progress)
         retry = []
         for request, params in pending:
             outcome = answered[request.key]
+            # Cada intento cuenta en el costo, también los que hubo que repetir
+            outcome.calls = paid.setdefault(request.key, []) + outcome.calls
+            paid[request.key] = outcome.calls
             if isinstance(outcome, AIError) and outcome.code == "FORMATO" and attempt < settings.AI_FORMAT_RETRIES:
                 retry.append((request, params))
                 continue

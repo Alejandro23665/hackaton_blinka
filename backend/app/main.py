@@ -2,7 +2,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import auth, documentos, trabajos
+from app.api import auth, documentos, metricas, trabajos
 from app.auth import current_user
 from app.core.config import settings
 
@@ -19,6 +19,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(trabajos.router, dependencies=[Depends(current_user)])
 app.include_router(documentos.router, dependencies=[Depends(current_user)])
+app.include_router(metricas.router, dependencies=[Depends(current_user)])
 
 
 @app.get("/health")

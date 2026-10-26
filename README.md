@@ -16,6 +16,7 @@ Diseño en [docs/01-diseno.md](docs/01-diseno.md).
 | R1 | Base de datos desde cero (4 tablas, `db/*.sql`) y backend adaptado | Hecha |
 | R2 | Interfaz adaptada a la base nueva | Hecha |
 | R3 | Inicio de sesión, dashboard del día y revisión humana (corrección a nombre del usuario) | Hecha |
+| R4 | Claude Haiku 5.5 con Message Batches y vista de métricas de IA (tokens, costo, rendimiento) | Hecha |
 | 5.7 | Despliegue | Pendiente |
 
 ## Base de datos
@@ -32,6 +33,8 @@ Se define **solo** con los archivos SQL de [`db/`](db/), que se aplican en orden
 - Los documentos desconocidos (boletas, notas de crédito…) se descartan: no se guardan.
 - El mismo documento (tipo, RUT y folio) no se guarda dos veces; no aplica al RUT ilegible `1-9`.
 - Todo el sistema es del proyecto Oxxo: no hay tabla de proyectos.
+- `llamadas_ia` (db/007): una fila por cada solicitud pagada a la IA (etapa, modelo, tanda, tokens de
+  entrada y salida, costo estimado, espera, resultado y documento). Las respuestas de la caché no se registran.
 - Un documento corregido por una persona queda a su nombre y sale de la cola de revisión; si el
   documento trae un descuadre real, la persona lo confirma y queda `DESCUADRE` revisado.
 
@@ -98,6 +101,9 @@ npm run dev                      # http://localhost:5173
   (ámbar), y la suma de montos en vivo. Al guardar pasa al siguiente pendiente.
 - *Documentos:* totales, filtros por tipo, observaciones y "requieren revisión", búsqueda por RUT o
   folio, y el detalle de cada documento (quién lo procesó o revisó).
+- *Métricas* (7, 30 o 90 días): tokens de entrada y salida por día, costo estimado (total y por
+  documento leído) y por etapa; % de documentos legibles sin intervención, pendientes y revisados,
+  campos que más faltan o generan dudas; tandas, espera de Claude y tasa de errores.
 
 ## API
 
@@ -117,6 +123,7 @@ Todas las rutas, salvo `/health` y `/auth/login`, piden `Authorization: Bearer <
 | PUT | `/documentos/{id}/correccion` | Una persona corrige o confirma los datos. Valida RUT y suma; un descuadre se guarda solo con `confirmar_descuadre` |
 | GET | `/documentos/{id}/imagen` | El archivo original del que salió |
 | GET | `/tipos-documentos` | FC, CI y GD |
+| GET | `/metricas` | Uso de IA (tokens, costo por día y por etapa) y rendimiento de la IA y del sistema de los últimos `dias` |
 
 El avance de los trabajos vive en memoria: si el servidor se reinicia se pierde, pero los documentos
 ya guardados quedan en la base. Si se agota la cuota de la IA el trabajo se detiene y los archivos
