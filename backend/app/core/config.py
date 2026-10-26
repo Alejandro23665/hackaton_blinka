@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     TOTAL_TOLERANCE_CLP: int = 0
     CLASSIFICATION_MIN_CONFIDENCE: float = 0.7
     FIELD_MIN_CONFIDENCE: float = 0.8
+    # Con segunda lectura: si las dos lecturas ven exactamente el mismo valor, basta esta seguridad.
+    # Dos lecturas independientes que coinciden pesan más que la seguridad que declara el modelo
+    AGREEMENT_MIN_CONFIDENCE: float = 0.5
 
     # Lectura con Claude (API de Anthropic). La clave va en CLAUDE_KEY
     CLAUDE_KEY: str | None = None

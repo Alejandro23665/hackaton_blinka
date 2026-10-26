@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from app.ai import client
 from app.core.config import settings
 
-PROMPT_VERSION = "seg-5"
+PROMPT_VERSION = "seg-6"
 
 DocType = Literal["GUIA_DESPACHO", "CONTROL_INTERNO", "FACTURA_ELECTRONICA", "DESCONOCIDO"]
 
@@ -127,7 +127,8 @@ uno por documento, numerados de izquierda a derecha y de arriba abajo.
 con un número arriba, una lista de productos con código, descripción y cantidad, y al final las líneas \
 "Neto", "Iva", "Imp Adic." y "Total". Suele estar corcheteada o superpuesta sobre el documento real. \
 Esa hoja NO tiene un recuadro con "R.U.T.", el tipo de documento y "N°". Un ticket térmico CON ese recuadro (por ejemplo un CONTROL INTERNO o una GUÍA ELECTRÓNICA de OXXO) es un documento real, nunca la hoja adjunta, aunque esté superpuesto sobre otro papel. \
-No es un documento del lote: no la devuelvas como documento ni uses su número o su título. Si tapa parte \
+No es un documento del lote: no la devuelvas como documento ni uses su número o su título. Suele titularse "Informe Ingreso". Una factura o guía en tira térmica larga puede quedar partida por esa hoja: la parte de arriba (con el recuadro R.U.T., tipo y N°) y la parte de abajo (detalle, Neto, Impuestos, IVA, Total y el total en palabras) son el MISMO documento y se leen las dos; lo único que se ignora es la tira de en medio. \
+Su zona (region) abarca las dos partes, de la cabecera al total. Si tapa parte \
 de un documento, informa solo ese documento, con su zona completa. Solo si en la página no hay nada más \
 que esa hoja, devuelve un único elemento DESCONOCIDO de página completa.
 - Si la página no tiene ningún documento, devuelve un único elemento DESCONOCIDO de página completa.

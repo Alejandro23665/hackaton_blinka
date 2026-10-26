@@ -237,3 +237,18 @@ def test_one_unreadable_additional_tax_makes_other_taxes_illegible_but_not_vat()
 def test_no_tax_lines_means_both_absent():
     result = normalize_extraction(fields(tax_lines=[]))
     assert result.fields["VAT_AMOUNT"].status == result.fields["OTHER_TAXES_AMOUNT"].status == "AUSENTE"
+
+
+def test_two_matching_readings_accept_lower_confidence():
+    # Las dos lecturas ven "$ 830" con 70 % de seguridad: coinciden, así que se acepta
+    low = reading("$ 100.000", confidence=0.7)
+    result = normalize_extraction(fields(NET_AMOUNT=low), fields(NET_AMOUNT=low))
+    assert (result.fields["NET_AMOUNT"].status, result.fields["NET_AMOUNT"].value) == ("LEIDO", 100000)
+    # Si no coinciden, sigue siendo ilegible
+    other = reading("$ 106.000", confidence=0.7)
+    result = normalize_extraction(fields(NET_AMOUNT=low), fields(NET_AMOUNT=other))
+    assert result.fields["NET_AMOUNT"].status == "ILEGIBLE"
+    # Por debajo del mínimo de coincidencia, tampoco
+    very_low = reading("$ 100.000", confidence=settings.AGREEMENT_MIN_CONFIDENCE - 0.1)
+    result = normalize_extraction(fields(NET_AMOUNT=very_low), fields(NET_AMOUNT=very_low))
+    assert result.fields["NET_AMOUNT"].status == "ILEGIBLE"

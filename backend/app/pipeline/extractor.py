@@ -14,7 +14,7 @@ from app.ai import client
 from app.core.config import settings
 from app.pipeline.fields import FIELD_NAMES
 
-PROMPT_VERSION = "ext-9"
+PROMPT_VERSION = "ext-10"
 # Margen alrededor de la zona del documento al recortarla (proporción de la página)
 CROP_MARGIN = 0.03
 
@@ -168,7 +168,7 @@ si falta el IVA, no lo calcules desde el neto. Lee solo lo que está escrito.
 impresora térmica), con un número arriba, una lista de productos con código, descripción y cantidad, y \
 al final las líneas "Neto", "Iva", "Imp Adic." y "Total". Suele estar corcheteada o superpuesta sobre el \
 documento. Esa hoja NO tiene un recuadro con "R.U.T.", el tipo de documento y "N°". Un ticket térmico CON ese recuadro (por ejemplo un CONTROL INTERNO o una GUÍA ELECTRÓNICA de OXXO) es un documento real, nunca la hoja adjunta, aunque esté superpuesto sobre otro papel. Si el documento que lees es un ticket con ese recuadro, el ticket ES el \
-documento y lo que se ve debajo no se lee. Nunca tomes de ella el número, el neto, el IVA, los impuestos adicionales ni el total: los \
+documento y lo que se ve debajo no se lee. Suele titularse "Informe Ingreso". Una factura o guía en tira térmica larga puede quedar partida por esa hoja: la parte de arriba (con el recuadro R.U.T., tipo y N°) y la parte de abajo (detalle, Neto, Impuestos, IVA, Total y el total en palabras) son el MISMO documento y se leen las dos; lo único que se ignora es la tira de en medio. Nunca tomes de ella el número, el neto, el IVA, los impuestos adicionales ni el total: los \
 campos se leen solo del documento, y su texto no va en transcription. Si esa hoja tapa un dato del \
 documento, ese campo es ILEGIBLE.
 - signature: si el documento está FIRMADO. present es true si hay trazos manuscritos de recepción: una firma o rúbrica, o un nombre, RUT o fecha escritos a mano (normalmente con lápiz azul o negro, en la parte inferior, sobre o junto a un recuadro con "Nombre:", "RUT:", "Fecha:", "Recinto:" o "Firma:"). Un recuadro con esas etiquetas pero vacío, o solo texto impreso, es false. La firma puede estar en cualquier hoja: indica en region_index en cuál.

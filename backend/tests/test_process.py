@@ -226,3 +226,29 @@ def test_unreadable_and_absent_required_fields_are_missing(client, fake_ai):
     _upload(client, _image())
     (doc,) = _documents(client)
     assert (doc["campos_faltantes"], doc["campos_dudosos"]) == (["folio", "fecha"], [])
+
+
+def test_unreadable_other_tax_leaves_impuestos_empty_not_zero(client, fake_ai):
+    fake_ai.pages = {1: INVOICE}
+    fake_ai.extractions = [
+        extraction(
+            EXEMPT_AMOUNT=reading("0"),
+            TOTAL_AMOUNT=reading("$ 119.830"),
+            tax_lines=[tax_line("19.000"), tax_line("8?0", label="IABA 10%", status="ILEGIBLE", confidence=0.3)],
+        )
+    ]
+    _upload(client, _image())
+    (doc,) = _documents(client)
+    assert (doc["impuestos"], doc["observaciones"], doc["campos_dudosos"]) == (None, "NO_LEGIBLE", ["impuestos"])
+
+
+def test_document_sharing_a_page_is_read_from_its_crop_and_the_full_page(client, fake_ai):
+    fake_ai.pages = {
+        1: page_response(
+            detected("CONTROL_INTERNO", "CONTROL INTERNO", "1", region=LEFT),
+            detected("CONTROL_INTERNO", "CONTROL INTERNO", "2", index=2, region=RIGHT),
+        )
+    }
+    fake_ai.extractions = [extraction(DOCUMENT_NUMBER=reading("N° 1")), extraction(DOCUMENT_NUMBER=reading("N° 2"))]
+    _upload(client, _image())
+    assert [call["images"] for call in fake_ai.extraction_calls] == [2, 2]

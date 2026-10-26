@@ -167,14 +167,19 @@ def row_values(reading: Reading) -> dict:
 
     other, exempt = amounts["OTHER_TAXES_AMOUNT"], amounts["EXEMPT_AMOUNT"]
     fields = reading.normalized.fields
+    # Otros impuestos o exento que no se leyeron (ni se dedujeron ni quedaron en 0 por la regla de montos)
+    unreadable_taxes = any(
+        fields[name].status == "ILEGIBLE" and amounts[name] is None for name in ("OTHER_TAXES_AMOUNT", "EXEMPT_AMOUNT")
+    )
     missing, doubtful = field_problems(reading)
     return {
         "rut_proveedor": reading.normalized.provider_rut,
         "folio": fields["DOCUMENT_NUMBER"].value,
         "fecha": fields["ISSUE_DATE"].value,
         "firma": reading.signed,
-        # El exento va sumado con los otros impuestos; el IVA, aparte
-        "impuestos": None if other is None and exempt is None else whole((other or 0) + (exempt or 0)),
+        # El exento va sumado con los otros impuestos; el IVA, aparte. Si uno de los dos no se leyó, la
+        # suma no se conoce: queda vacía (nunca 0)
+        "impuestos": None if unreadable_taxes or (other is None and exempt is None) else whole((other or 0) + (exempt or 0)),
         "total_neto": whole(amounts["NET_AMOUNT"]),
         "iva": whole(amounts["VAT_AMOUNT"]),
         "total": whole(amounts["TOTAL_AMOUNT"]),
@@ -225,16 +230,22 @@ def save(session: Session, reading: Reading, image_key: str) -> DocumentResult:
 
 
 def _document_images(document: GroupedDocument, pages: dict[int, RenderedPage]) -> list[tuple[bytes, str]]:
-    """La imagen de cada parte del documento: la página completa o el recorte de su zona."""
+    """La imagen de cada parte del documento: la página completa o, si comparte la página con otros,
+    el recorte de su zona seguido de la página completa (la zona que marca la IA puede quedar corta:
+    por ejemplo, solo la cabecera de una factura cuyo pie sigue debajo de una hoja corcheteada)."""
     images = []
     for number, region in enumerate(document.regions, start=1):
         page = pages[region.page_id]
         description = f"hoja {number} de {len(document.regions)} (página {page.number} del archivo)"
-        jpeg = page.data
-        if region.bbox:
-            jpeg = extractor.crop(jpeg, region.bbox)
-            description += f", recorte de la zona {region.position_hint or 'indicada'}"
-        images.append((jpeg, description))
+        if not region.bbox:
+            images.append((page.data, description))
+            continue
+        images.append((extractor.crop(page.data, region.bbox), f"{description}, recorte de la zona {region.position_hint or 'indicada'}"))
+        images.append((
+            page.data,
+            f"{description}, página completa como contexto: el documento es el del recorte anterior; si continúa "
+            "fuera del recorte (por ejemplo debajo de una hoja superpuesta), lee aquí esa parte; no leas otros documentos",
+        ))
     return images
 
 

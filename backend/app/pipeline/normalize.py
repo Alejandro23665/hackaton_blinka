@@ -188,7 +188,16 @@ class Normalized:
     issues: list[dict] = field(default_factory=list)
 
 
-def normalize_field(name: str, status: str, raw_text: str | None, confidence: float | None, region_index: int | None) -> NormalizedField:
+def normalize_field(
+    name: str,
+    status: str,
+    raw_text: str | None,
+    confidence: float | None,
+    region_index: int | None,
+    min_confidence: float | None = None,
+) -> NormalizedField:
+    """Un campo leído por la IA, convertido a su valor. `min_confidence`: por defecto FIELD_MIN_CONFIDENCE."""
+    min_confidence = settings.FIELD_MIN_CONFIDENCE if min_confidence is None else min_confidence
     raw = raw_text.strip() if raw_text and raw_text.strip() else None
     item = NormalizedField(name, status, None, raw, confidence, region_index)
     if status == "AUSENTE":
@@ -200,9 +209,9 @@ def normalize_field(name: str, status: str, raw_text: str | None, confidence: fl
     if raw is None:
         item.status, item.invalid_reason = "ILEGIBLE", "marcado como leído pero sin texto"
         return item
-    if confidence is not None and confidence < settings.FIELD_MIN_CONFIDENCE:
+    if confidence is not None and confidence < min_confidence:
         item.status = "ILEGIBLE"
-        item.invalid_reason = f"confianza {confidence:.2f}, por debajo del mínimo {settings.FIELD_MIN_CONFIDENCE:.2f}"
+        item.invalid_reason = f"confianza {confidence:.2f}, por debajo del mínimo {min_confidence:.2f}"
         return item
     parsed = PARSERS[name](raw)
     if parsed.value is None:
@@ -224,7 +233,7 @@ def split_tax_lines(lines: list[dict]) -> tuple[list[dict], list[dict]]:
     return vat, others
 
 
-def normalize_tax_lines(name: str, lines: list[dict]) -> NormalizedField:
+def normalize_tax_lines(name: str, lines: list[dict], min_confidence: float | None = None) -> NormalizedField:
     """Un campo de impuesto como suma de sus líneas. La suma la hace el código, no la IA.
 
     Sin líneas: AUSENTE. Si alguna línea no se lee, el campo queda ILEGIBLE: sumar solo las legibles
@@ -237,7 +246,7 @@ def normalize_tax_lines(name: str, lines: list[dict]) -> NormalizedField:
             line.get("label") or "impuesto",
             normalize_field(
                 name, line.get("status", "ILEGIBLE"), line.get("raw_text"),
-                line.get("confidence"), line.get("region_index"),
+                line.get("confidence"), line.get("region_index"), min_confidence,
             ),
         )
         for line in lines
@@ -255,12 +264,13 @@ def normalize_tax_lines(name: str, lines: list[dict]) -> NormalizedField:
     return result
 
 
-def _from_reading(name: str, fields: dict[str, dict]) -> NormalizedField:
+def _from_reading(name: str, fields: dict[str, dict], min_confidence: float | None = None) -> NormalizedField:
     given = fields.get(name) or {"status": "AUSENTE"}
     if "lines" in given:
-        return normalize_tax_lines(name, given["lines"])
+        return normalize_tax_lines(name, given["lines"], min_confidence)
     return normalize_field(
-        name, given.get("status", "AUSENTE"), given.get("raw_text"), given.get("confidence"), given.get("region_index")
+        name, given.get("status", "AUSENTE"), given.get("raw_text"), given.get("confidence"),
+        given.get("region_index"), min_confidence,
     )
 
 
@@ -291,17 +301,19 @@ def normalize_extraction(fields: dict[str, dict], check: dict[str, dict] | None 
     """`fields`: por campo, {status, raw_text, confidence, region_index} como los devuelve el extractor.
 
     `check`: una segunda lectura independiente (misma forma). Si se da, los campos en los que las
-    dos lecturas no coinciden quedan ILEGIBLE con la alerta LECTURA_INCONSISTENTE.
+    dos lecturas no coinciden quedan ILEGIBLE con la alerta LECTURA_INCONSISTENTE, y los que
+    coinciden se aceptan desde AGREEMENT_MIN_CONFIDENCE (sin ella, se exige FIELD_MIN_CONFIDENCE).
     VAT_AMOUNT y OTHER_TAXES_AMOUNT vienen como {"lines": [...]} (líneas de impuesto): se suman con
     normalize_tax_lines.
     """
     result: dict[str, NormalizedField] = {}
     issues: list[dict] = []
     for name in PARSERS:
-        item = _from_reading(name, fields)
+        threshold = settings.AGREEMENT_MIN_CONFIDENCE if check is not None else None
+        item = _from_reading(name, fields, threshold)
         result[name] = item
         if check is not None:
-            second = _from_reading(name, check)
+            second = _from_reading(name, check, threshold)
             reason = reconcile(item, second)
             if reason:
                 issues.append(
