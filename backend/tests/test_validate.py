@@ -181,3 +181,19 @@ def test_vat_check_ignores_other_taxes():
         TOTAL_AMOUNT=("LEIDO", Decimal(2925)),
     )
     assert (result.overall_status, result.issues) == ("PROCESADO", [])
+
+
+def test_unreadable_tax_line_is_zero_when_the_readable_lines_complete_the_total():
+    # Neto 100.000 + IVA 19.000 + IABA legible 2.000 = 121.000 = total: la línea ilegible solo puede ser 0
+    result = validate(
+        "FACTURA_ELECTRONICA",
+        {"PROVIDER_RUT": "LEIDO", "DOCUMENT_NUMBER": "LEIDO", "ISSUE_DATE": "LEIDO", "NET_AMOUNT": "LEIDO",
+         "VAT_AMOUNT": "LEIDO", "OTHER_TAXES_AMOUNT": "ILEGIBLE", "EXEMPT_AMOUNT": "AUSENTE", "TOTAL_AMOUNT": "LEIDO"},
+        {"PROVIDER_RUT": "76123456-0", "DOCUMENT_NUMBER": "1", "ISSUE_DATE": date(2026, 10, 14),
+         "NET_AMOUNT": Decimal(100000), "VAT_AMOUNT": Decimal(19000), "OTHER_TAXES_AMOUNT": None,
+         "EXEMPT_AMOUNT": None, "TOTAL_AMOUNT": Decimal(121000)},
+        ZERO,
+        partial={"OTHER_TAXES_AMOUNT": Decimal(2000)},
+    )
+    assert (result.overall_status, result.amounts["OTHER_TAXES_AMOUNT"]) == ("PROCESADO", Decimal(2000))
+    assert "$ 2.000" in result.issues[0]["message"]

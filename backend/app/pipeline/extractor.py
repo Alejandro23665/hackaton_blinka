@@ -14,7 +14,7 @@ from app.ai import client
 from app.core.config import settings
 from app.pipeline.fields import FIELD_NAMES
 
-PROMPT_VERSION = "ext-10"
+PROMPT_VERSION = "ext-13"
 # Margen alrededor de la zona del documento al recortarla (proporción de la página)
 CROP_MARGIN = 0.03
 
@@ -75,6 +75,8 @@ class Extraction(BaseModel):
     signature: SignatureReading
     transcription: str
     notes: str | None
+    # Rótulo impreso junto a la fecha usada para ISSUE_DATE (el código rechaza "referencia", "vencimiento"…)
+    date_label: str | None = None
 
     def model_post_init(self, __context) -> None:
         missing = set(READ_FIELDS) - set(self.fields)
@@ -97,7 +99,7 @@ _FIELD_SCHEMA = {
 RESPONSE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["fields", "tax_lines", "signature", "transcription", "notes"],
+    "required": ["fields", "tax_lines", "signature", "transcription", "notes", "date_label"],
     "properties": {
         "fields": {
             "type": "object",
@@ -133,6 +135,7 @@ RESPONSE_SCHEMA = {
             },
         },
         "transcription": {"type": "string", "description": "Todo el texto legible del documento, en orden de lectura"},
+        "date_label": {"type": ["string", "null"], "description": "Rótulo impreso junto a la fecha de ISSUE_DATE; null si no tiene"},
         "notes": {"type": ["string", "null"], "description": "Problemas de lectura, en español; null si no hay"},
     },
 }
@@ -142,13 +145,18 @@ Recibes las imágenes de UN documento (una por hoja o zona) y su tipo, y lees es
 
 - PROVIDER_RUT: RUT de quien EMITE el documento (normalmente en el recuadro con el tipo y el número), \
 no el del cliente o receptor.
-- DOCUMENT_NUMBER: número o folio del documento (el "N°" del recuadro).
-- ISSUE_DATE: fecha de emisión.
+- DOCUMENT_NUMBER: número o folio del documento (el "N°" del recuadro). En los tickets térmicos el \
+cero se imprime con una barra (Ø): es 0, no 8 ni 9. Léelo dígito por dígito, sin completarlo.
+- ISSUE_DATE: fecha de emisión: la que el documento rotula como tal ("Fecha", "Fecha Emisión", \
+"FECHA :" en los tickets, o "Santiago, 18 de octubre de 2026" junto al encabezado). Nunca uses la \
+fecha de referencia, de vencimiento, de la orden de compra ni la de una hoja adjunta: si la de emisión \
+no se lee, es ILEGIBLE. En date_label copia el rótulo impreso junto a la fecha que usaste (por \
+ejemplo "FECHA EMISION" o "FECHA :"), o null si no tiene rótulo.
 - NET_AMOUNT: monto neto.
 - EXEMPT_AMOUNT: monto exento.
 - TOTAL_AMOUNT: monto total.
 
-Y aparte, en tax_lines, CADA línea de impuesto por separado, con su nombre tal como aparece (label) y su monto (raw_text). Los impuestos posibles son: IVA (19 %), IABA 10%, IABA 18%, ILA VIN 20.5%, ILA CER 20.5%, ILA 31.5% (también impresos como ILL o "Imp. Adic."). Una entrada por línea; no las sumes ni incluyas neto, exento ni total. Si el monto de una línea está tapado (por ejemplo, por una perforación o un timbre) o no se lee, igualmente inclúyela con status ILEGIBLE y ? en lo que no se ve. Si el documento no tiene ninguna línea de impuesto, tax_lines es una lista vacía.
+Y aparte, en tax_lines, CADA línea de impuesto por separado, con su nombre tal como aparece (label) y su monto (raw_text). Los impuestos posibles son: IVA (19 %), IABA 10%, IABA 18%, ILA VIN 20.5%, ILA CER 20.5%, ILA 31.5% (también impresos como ILL o "Imp. Adic."). Una entrada por línea; no las sumes ni incluyas neto, exento ni total. Si el monto de una línea está tapado (por ejemplo, por una perforación o un timbre) o no se lee, igualmente inclúyela con status ILEGIBLE y ? en lo que no se ve. Una línea de impuestos adicionales en 0 (por ejemplo "Impuestos: $0" o "Imp. Adic. 0") también se incluye, con 0. Si el documento no tiene ninguna línea de impuesto, tax_lines es una lista vacía.
 
 Para cada campo devuelve:
 - status: LEIDO si aparece y lo lees con seguridad; AUSENTE si no aparece en el documento; \
@@ -164,11 +172,14 @@ Reglas:
 si falta el IVA, no lo calcules desde el neto. Lee solo lo que está escrito.
 - Un monto que no aparece es AUSENTE, no 0. Usa 0 solo si el documento muestra 0 escrito.
 - transcription: todo el texto legible del documento, en orden de lectura.
+- Lee solo el documento del tipo indicado. Si en las imágenes aparece otro documento (por ejemplo un \
+CONTROL INTERNO superpuesto sobre una GUÍA, o al revés), es otro documento: no uses sus datos; si \
+tapa un dato del documento indicado, ese campo es ILEGIBLE.
 - Ignora por completo la hoja adjunta tipo ticket si aparece: una tira de papel angosta (impresa en \
 impresora térmica), con un número arriba, una lista de productos con código, descripción y cantidad, y \
 al final las líneas "Neto", "Iva", "Imp Adic." y "Total". Suele estar corcheteada o superpuesta sobre el \
-documento. Esa hoja NO tiene un recuadro con "R.U.T.", el tipo de documento y "N°". Un ticket térmico CON ese recuadro (por ejemplo un CONTROL INTERNO o una GUÍA ELECTRÓNICA de OXXO) es un documento real, nunca la hoja adjunta, aunque esté superpuesto sobre otro papel. Si el documento que lees es un ticket con ese recuadro, el ticket ES el \
-documento y lo que se ve debajo no se lee. Suele titularse "Informe Ingreso". Una factura o guía en tira térmica larga puede quedar partida por esa hoja: la parte de arriba (con el recuadro R.U.T., tipo y N°) y la parte de abajo (detalle, Neto, Impuestos, IVA, Total y el total en palabras) son el MISMO documento y se leen las dos; lo único que se ignora es la tira de en medio. Nunca tomes de ella el número, el neto, el IVA, los impuestos adicionales ni el total: los \
+documento. Esa hoja NO tiene un recuadro con "R.U.T.", el tipo de documento y "N°". Un ticket térmico CON ese recuadro (por ejemplo un CONTROL INTERNO o una GUÍA ELECTRÓNICA de OXXO) es un documento real, nunca la hoja adjunta, aunque esté superpuesto sobre otro papel. Si el documento del tipo indicado es un ticket con ese recuadro, lo que se \
+ve debajo de él no se lee. Suele titularse "Informe Ingreso". Una factura o guía en tira térmica larga puede quedar partida por esa hoja: la parte de arriba (con el recuadro R.U.T., tipo y N°) y la parte de abajo (detalle, Neto, Impuestos, IVA, Total y el total en palabras) son el MISMO documento y se leen las dos; lo único que se ignora es la tira de en medio. Nunca tomes de ella el número, el neto, el IVA, los impuestos adicionales ni el total: los \
 campos se leen solo del documento, y su texto no va en transcription. Si esa hoja tapa un dato del \
 documento, ese campo es ILEGIBLE.
 - signature: si el documento está FIRMADO. present es true si hay trazos manuscritos de recepción: una firma o rúbrica, o un nombre, RUT o fecha escritos a mano (normalmente con lápiz azul o negro, en la parte inferior, sobre o junto a un recuadro con "Nombre:", "RUT:", "Fecha:", "Recinto:" o "Firma:"). Un recuadro con esas etiquetas pero vacío, o solo texto impreso, es false. La firma puede estar en cualquier hoja: indica en region_index en cuál.

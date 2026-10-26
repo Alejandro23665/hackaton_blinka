@@ -142,6 +142,7 @@ cd backend
 python -m app.evaluation.run                 # procesa las pendientes y genera el informe
 python -m app.evaluation.run --limite 10     # como mucho 10 imágenes nuevas
 python -m app.evaluation.run --solo-informe  # solo compara, sin llamar a la IA
+python -m app.evaluation.run --corrida claude2  # corrida aparte (base y resultados propios), para comparar
 ```
 
 - Usa una base aparte (`<tu base>_evaluacion`, con las mismas tablas) y `backend/storage_eval/`: no toca tus datos.

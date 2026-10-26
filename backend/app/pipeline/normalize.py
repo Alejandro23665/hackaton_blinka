@@ -72,10 +72,11 @@ def parse_document_number(raw: str) -> Parsed:
     if _doubtful(raw):
         return Parsed(None, "tiene caracteres que no se leyeron con seguridad")
     text = re.sub(r"^\s*(N\s*[°ºO]\s*\.?|NRO\.?|NUM\.?|NUMERO|FOLIO|#)\s*:?\s*", "", raw.strip(), flags=re.IGNORECASE)
+    # Algunos documentos imprimen el número con separador de miles, punto o espacio (2.397, 2 501.563):
+    # el separador no es parte del número
+    if re.fullmatch(r"\d{1,3}([.\s]\d{3})+", text.strip()):
+        text = re.sub(r"[.\s]", "", text)
     text = re.sub(r"\s+", "", text)
-    # Algunos documentos imprimen el número con punto de miles (2.397): el punto no es parte del número
-    if re.fullmatch(r"\d{1,3}(\.\d{3})+", text):
-        text = text.replace(".", "")
     if not re.fullmatch(r"[0-9A-Za-z\-]{1,40}", text) or not re.search(r"\d", text):
         return Parsed(None, f"número de documento no reconocido: {raw!r}")
     return Parsed(text)
@@ -95,6 +96,15 @@ def _full_year(year: int) -> int:
     return year + 2000 if year < 100 else year
 
 
+# Rótulos de fechas que no son la de emisión
+_OTHER_DATE = re.compile(r"REFERENCIA|\bREF\b|VENC|ORDEN|\bO\.?\s?C\b|PAGO")
+
+
+def is_other_date_label(label: str | None) -> bool:
+    """La fecha de referencia, vencimiento, orden de compra o pago no es la de emisión."""
+    return bool(label) and bool(_OTHER_DATE.search(_plain(label)))
+
+
 def parse_date(raw: str, today: date | None = None) -> Parsed:
     """Formato chileno día/mes/año: '14/10/2026', '14-10-26', '14 de octubre de 2026', '14-OCT-2026'.
 
@@ -103,7 +113,14 @@ def parse_date(raw: str, today: date | None = None) -> Parsed:
     if _doubtful(raw):
         return Parsed(None, "tiene caracteres que no se leyeron con seguridad")
     text = _plain(raw)
+    if is_other_date_label(text):
+        return Parsed(None, f"no es la fecha de emisión (rótulo: {raw!r})")
+    # Hora pegada a la fecha en los tickets: '22-10-2026 HORA: 13:51'
+    text = re.sub(r"\s+HORA\b.*$", "", text)
+    text = re.sub(r"\s*([/\-.])\s*", r"\1", text)
     text = re.sub(r"^(FECHA( DE)?( EMISION)?|EMISION)\s*:?\s*", "", text)
+    # El lugar de emisión delante de la fecha: 'SANTIAGO, 18 DE OCTUBRE DE 2026'
+    text = re.sub(r"^[A-Z][A-Z ]*,\s*(?=\d)", "", text)
     parts = None
     if m := re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", text):
         parts = (int(m.group(3)), int(m.group(2)), int(m.group(1)))
@@ -133,7 +150,9 @@ def parse_amount(raw: str) -> Parsed:
     """Montos en pesos chilenos: '$ 1.190.000' → 1190000. El punto separa miles y la coma, decimales."""
     if _doubtful(raw):
         return Parsed(None, "tiene caracteres que no se leyeron con seguridad")
-    text = re.sub(r"^(CLP|\$|PESOS)\s*|\s*(CLP|PESOS)$", "", raw.strip().upper()).replace("$", "")
+    # Rótulo delante ('MONTO NETO', 'IVA 19%'): no es parte del monto
+    text = re.sub(r"^[A-Z][A-Z .()]*(\d+([.,]\d+)?\s*%\)?)?\s*:?\s+(?=[$\d])", "", _plain(raw))
+    text = re.sub(r"^(CLP|\$|PESOS)\s*|\s*(CLP|PESOS)$", "", text).replace("$", "")
     text = re.sub(r"\s+", "", text)
     if re.fullmatch(r"\d{1,3}(\.\d{3})+(,\d+)?", text):  # 1.190.000 o 1.190.000,50
         number = text.replace(".", "").replace(",", ".")
@@ -180,6 +199,8 @@ class NormalizedField:
     confidence: float | None
     region_index: int | None
     invalid_reason: str | None = None
+    # Impuestos con alguna línea ilegible: la suma de las líneas que sí se leyeron (para deducir)
+    partial: Decimal | None = None
 
 
 @dataclass
@@ -261,6 +282,7 @@ def normalize_tax_lines(name: str, lines: list[dict], min_confidence: float | No
     if unreadable:
         label, item = unreadable[0]
         result.status, result.invalid_reason = "ILEGIBLE", f"no se pudo leer {label} ({item.invalid_reason})"
+        result.partial = sum((item.value for _, item in parsed if item.status == "LEIDO"), Decimal(0))
         return result
     result.value = sum((item.value for _, item in parsed), Decimal(0))
     return result
@@ -316,7 +338,15 @@ def normalize_extraction(fields: dict[str, dict], check: dict[str, dict] | None 
         result[name] = item
         if check is not None:
             second = _from_reading(name, check, threshold)
+            # La suma parcial solo vale si la segunda lectura no la contradice
+            if item.partial is not None and second.status == "LEIDO" and second.value != item.partial:
+                item.partial = None
+            # La principal leyó todas las líneas y la segunda dejó una ilegible con el resto igual: lo leído
+            # sirve como suma parcial (solo se usa si con ella la suma cierra exacta con el total)
+            agreed_partial = item.value if item.status == "LEIDO" and second.partial == item.value else None
             reason = reconcile(item, second)
+            if reason and agreed_partial is not None:
+                item.partial = agreed_partial
             if reason:
                 issues.append(
                     {

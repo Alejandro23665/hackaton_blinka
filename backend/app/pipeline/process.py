@@ -28,7 +28,7 @@ from app.core.config import settings
 from app.models import MODEL_ROLE, DocumentoProcesado, LlamadaIA, Rol, TipoDocumento, Usuario
 from app.pipeline import extractor, segmenter
 from app.pipeline.grouper import GroupedDocument, group_pages
-from app.pipeline.normalize import Normalized, normalize_extraction, split_tax_lines
+from app.pipeline.normalize import Normalized, is_other_date_label, normalize_extraction, split_tax_lines
 from app.pipeline.preprocess import PreprocessError, RenderedPage, render_pages
 from app.pipeline.validate import OPTIONAL_AMOUNTS, Validation, required_fields, validate
 from app.storage import get_storage
@@ -100,6 +100,10 @@ def _readings(extraction: extractor.Extraction) -> dict[str, dict]:
     """Lecturas por campo para el normalizador. Los impuestos van como líneas: el código separa el IVA
     de los demás (IABA, ILA…) y los suma."""
     readings = {name: reading.model_dump() for name, reading in extraction.fields.items()}
+    # La fecha que trae otro rótulo (referencia, vencimiento, orden de compra) no es la de emisión
+    date = readings.get("ISSUE_DATE")
+    if date and date.get("status") == "LEIDO" and is_other_date_label(extraction.date_label):
+        readings["ISSUE_DATE"] = {**date, "status": "ILEGIBLE"}
     vat_lines, other_lines = split_tax_lines([line.model_dump() for line in extraction.tax_lines])
     readings["VAT_AMOUNT"] = {"lines": vat_lines}
     readings["OTHER_TAXES_AMOUNT"] = {"lines": other_lines}
@@ -118,6 +122,7 @@ def build_reading(doc_type: str, first: extractor.Extraction, second: extractor.
         {name: item.status for name, item in normalized.fields.items()},
         values,
         Decimal(settings.TOTAL_TOLERANCE_CLP),
+        partial={name: item.partial for name, item in normalized.fields.items() if item.partial is not None},
     )
     # Firmado solo si las dos lecturas ven la firma: dar por recibido algo sin firma es peor
     signed = first.signature.present and (second is None or second.signature.present)

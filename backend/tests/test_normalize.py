@@ -252,3 +252,56 @@ def test_two_matching_readings_accept_lower_confidence():
     very_low = reading("$ 100.000", confidence=settings.AGREEMENT_MIN_CONFIDENCE - 0.1)
     result = normalize_extraction(fields(NET_AMOUNT=very_low), fields(NET_AMOUNT=very_low))
     assert result.fields["NET_AMOUNT"].status == "ILEGIBLE"
+
+
+def test_folio_with_space_as_thousands_separator():
+    assert parse_document_number("2 501.563").value == "2501563"
+    assert parse_document_number("N° 2 500 095").value == "2500095"
+
+
+def test_date_with_place_in_front():
+    assert parse_date("Santiago, 18 de octubre de 2026").value == date(2026, 10, 18)
+
+
+def test_date_with_spaces_around_separators():
+    assert parse_date("22 / 10 / 2026").value == date(2026, 10, 22)
+
+
+def test_reference_due_or_purchase_order_dates_are_not_the_issue_date():
+    assert parse_date("FECHA EMISION: 19-10-2026").value == date(2026, 10, 19)
+    for text in ("FECHA REFERENCIA 16-10-2026", "Fecha Ref.: 21/10/2026", "FECHA VENCIMIENTO: 02-11-2026"):
+        assert parse_date(text).value is None, text
+
+
+def test_readable_tax_lines_survive_when_the_other_reading_adds_an_unreadable_line():
+    # Una lectura ve IABA 10 % y 18 %; la otra, además, una columna ILA ilegible: lo leído queda como suma parcial
+    first = fields(tax_lines=[tax_line("19.000"), tax_line("1.000", label="IABA 10%"), tax_line("1.000", label="IABA 18%")])
+    second = fields(
+        tax_lines=[
+            tax_line("19.000"), tax_line("1.000", label="IABA 10%"), tax_line("1.000", label="IABA 18%"),
+            tax_line("?", label="ILA", status="ILEGIBLE", confidence=0.2),
+        ]
+    )
+    other = normalize_extraction(first, second).fields["OTHER_TAXES_AMOUNT"]
+    assert (other.status, other.partial) == ("ILEGIBLE", Decimal(2000))
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("MONTO NETO 249.836", 249836), ("TOTAL: $ 1.190", 1190), ("IVA 19% 6.778", 6778), ("ILA (18,0%) $ 589", 589)],
+)
+def test_amount_with_its_label_in_front(raw, expected):
+    assert parse_amount(raw).value == expected
+
+
+def test_date_with_time_after_it():
+    assert parse_date("fecha : 22-10-2026 hora: 13:51").value == date(2026, 10, 22)
+
+
+def test_date_label_of_another_date_marks_the_issue_date_unreadable():
+    from app.pipeline.extractor import Extraction
+    from app.pipeline.process import _readings
+
+    data = extraction(ISSUE_DATE=reading("16-10-2026"))
+    assert _readings(Extraction.model_validate({**data, "date_label": "FECHA EMISION"}))["ISSUE_DATE"]["status"] == "LEIDO"
+    assert _readings(Extraction.model_validate({**data, "date_label": "FECHA REFERENCIA"}))["ISSUE_DATE"]["status"] == "ILEGIBLE"

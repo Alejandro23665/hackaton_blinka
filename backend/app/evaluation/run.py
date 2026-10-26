@@ -3,6 +3,7 @@
     python -m app.evaluation.run                  # procesa las muestras pendientes y genera el informe
     python -m app.evaluation.run --solo-informe   # solo compara (no llama a la IA)
     python -m app.evaluation.run --limite 10      # procesa como mucho 10 imágenes nuevas
+    python -m app.evaluation.run --corrida claude1  # corrida aparte: su propia base y sus resultados
 
 - Usa una base aparte (<tu base>_evaluacion, con las mismas tablas de db/*.sql) y un almacenamiento
   aparte (backend/storage_eval): no se mezcla con tus datos. La caché de la IA sí se comparte:
@@ -12,7 +13,9 @@
 - muestras/respuestas.json: las respuestas correctas. Las imágenes nuevas se agregan prellenadas
   con lo que leyó el sistema y "revisado": false; se corrigen a mano y se marcan "revisado": true.
   Solo las revisadas cuentan en el informe.
-- muestras/resultados/: lo que leyó el sistema (sistema.json) y el informe (informe.md).
+- muestras/resultados/: lo que leyó el sistema (sistema.json) y el informe (informe.md). Con
+  --corrida NOMBRE, en muestras/resultados/NOMBRE/ y con la base <tu base>_eval_NOMBRE: sirve para
+  comparar pasadas (por ejemplo, antes y después de cambiar las instrucciones) sin mezclarlas.
 """
 import argparse
 import hashlib
@@ -42,10 +45,11 @@ TYPE_NAMES = {code: name for name, code in TYPE_CODES.items()}
 STATES = {observation: state for state, observation in OBSERVATIONS.items()}
 
 
-def _eval_engine():
-    """Base <nombre>_evaluacion en el mismo servidor; se crea (con sus tablas) si no existe."""
+def _eval_engine(run: str | None = None):
+    """Base <nombre>_evaluacion (o <nombre>_eval_<corrida>) en el mismo servidor; se crea (con sus
+    tablas) si no existe."""
     url = make_url(settings.DATABASE_URL)
-    name = f"{url.database}_evaluacion"
+    name = f"{url.database}_eval_{run}" if run else f"{url.database}_evaluacion"
     admin = url.set(drivername="postgresql", database="postgres").render_as_string(hide_password=False)
     with psycopg.connect(admin, autocommit=True) as conn:
         if not conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone():
@@ -178,17 +182,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--limite", type=int, default=None, help="Máximo de imágenes nuevas a procesar")
     parser.add_argument("--solo-informe", action="store_true", help="No procesa; solo compara lo ya leído")
+    parser.add_argument("--corrida", default=None, help="Nombre de una corrida aparte (letras, números y _)")
     args = parser.parse_args()
+    if args.corrida and not re.fullmatch(r"[a-z0-9_]{1,30}", args.corrida):
+        sys.exit("--corrida: usa solo minúsculas, números y _ (máximo 30).")
+    results = RESULTS / args.corrida if args.corrida else RESULTS
 
     if not IMAGES.is_dir():
         sys.exit(f"No existe {IMAGES}: copia ahí las imágenes de muestra.")
     settings.STORAGE_DIR = BACKEND_DIR / "storage_eval"
-    RESULTS.mkdir(parents=True, exist_ok=True)
-    previous = RESULTS / "sistema.json"
+    results.mkdir(parents=True, exist_ok=True)
+    previous = results / "sistema.json"
     system = json.loads(previous.read_text(encoding="utf-8")) if previous.is_file() else {}
 
     if not args.solo_informe:
-        system = process(_eval_engine(), system, args.limite)
+        system = process(_eval_engine(args.corrida), system, args.limite)
         previous.write_text(json.dumps(system, ensure_ascii=False, indent=2), encoding="utf-8")
 
     answers = _load_answers()
@@ -196,10 +204,10 @@ def main() -> None:
     reviewed = [a for a in answers if a.get("revisado")]
     totals = compare(reviewed, system)
     text = report(totals, pending=len(answers) - len(reviewed))
-    (RESULTS / "informe.md").write_text(text, encoding="utf-8")
+    (results / "informe.md").write_text(text, encoding="utf-8")
 
     print(f"\nProcesadas: {len(system)} de {len(_images())} imágenes. Respuestas nuevas por revisar: {added}.")
-    print(f"Revisadas: {len(reviewed)}. Informe: {RESULTS / 'informe.md'}")
+    print(f"Revisadas: {len(reviewed)}. Informe: {results / 'informe.md'}")
 
 
 if __name__ == "__main__":

@@ -2,7 +2,8 @@
 
 - Campos obligatorios según el tipo de documento.
 - Suma: neto + IVA + otros impuestos + exento = total, con la tolerancia configurada.
-- Un opcional ilegible (otros impuestos, exento) vale 0 si los demás montos ya cuadran con el total.
+- Un opcional ilegible (otros impuestos, exento) vale 0 si los demás montos ya cuadran con el total
+  (o, si tiene líneas legibles, la suma de esas líneas: la ilegible solo puede ser 0).
 - Si falta un monto obligatorio (neto, IVA o total), todos los montos quedan en 0 y el documento,
   NO_LEGIBLE: no se guardan montos sueltos de un documento que no se pudo leer entero.
 - Alertas que no cambian el estado (IVA distinto del 19 %).
@@ -72,8 +73,11 @@ def validate(
     statuses: dict[str, str],
     values: dict[str, object],
     tolerance: Decimal,
+    partial: dict[str, Decimal] | None = None,
 ) -> Validation:
-    """`statuses` y `values`: estado y valor normalizado de cada campo (None si no hay valor)."""
+    """`statuses` y `values`: estado y valor normalizado de cada campo (None si no hay valor).
+    `partial`: en los opcionales ilegibles con líneas legibles (otros impuestos), su suma."""
+    partial = partial or {}
     issues: list[dict] = []
     reasons: list[str] = []
 
@@ -105,18 +109,19 @@ def validate(
         missing_amounts = [name for name in REQUIRED_AMOUNTS if values[name] is None]
         unreadable = [name for name in OPTIONAL_AMOUNTS if statuses[name] == "ILEGIBLE"]
         if unreadable and not missing_amounts:
-            # Si los demás montos ya suman el total, el opcional ilegible no puede ser otro que 0
+            # Si los demás montos (y las líneas legibles) ya suman el total, lo ilegible no puede ser otro que 0
             known = sum((amounts[name] for name in OPTIONAL_AMOUNTS if amounts[name] is not None), Decimal(0))
+            known += sum((partial.get(name, Decimal(0)) for name in unreadable), Decimal(0))
             if abs(amounts["TOTAL_AMOUNT"] - amounts["NET_AMOUNT"] - amounts["VAT_AMOUNT"] - known) <= tolerance:
                 for name in unreadable:
-                    amounts[name] = Decimal(0)
+                    amounts[name] = partial.get(name, Decimal(0))
                     issues.append(
                         {
                             "code": "OPCIONAL_DEDUCIDO",
                             "severity": "INFO",
                             "field_name": name,
-                            "message": f"El {LABELS[name]} no se lee, pero los demás montos ya suman el total: "
-                            "se registró en $ 0.",
+                            "message": f"El {LABELS[name]} no se lee del todo, pero los demás montos ya suman "
+                            f"el total: se registró en {clp(amounts[name])}.",
                             "details": None,
                         }
                     )
