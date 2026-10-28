@@ -4,6 +4,7 @@
 - Sesión: un token firmado con SECRET_KEY (HMAC-SHA256) que dice qué usuario es y hasta cuándo vale.
   Viaja en la cabecera `Authorization: Bearer <token>`.
 - El usuario "Modelo IA" no puede iniciar sesión: su hash ('!') no es válido.
+- Un perfil desactivado no puede iniciar sesión y sus sesiones abiertas dejan de valer.
 """
 import base64
 import hashlib
@@ -19,7 +20,7 @@ from sqlmodel import Session, col, select
 
 from app.core.config import settings
 from app.db.session import get_session
-from app.models import MODEL_ROLE, Rol, Usuario
+from app.models import ADMIN_ROLE, MODEL_ROLE, Rol, Usuario
 
 SCRYPT = {"n": 2**14, "r": 8, "p": 1}
 
@@ -97,9 +98,19 @@ def current_user(
     if authorization and authorization.lower().startswith("bearer "):
         user_id = read_token(authorization[7:].strip())
         user = session.get(Usuario, user_id) if user_id is not None else None
-        if user is not None:
+        if user is not None and user.activo:
             return user
     raise HTTPException(401, "Inicia sesión para continuar", headers={"WWW-Authenticate": "Bearer"})
 
 
 CurrentUser = Annotated[Usuario, Depends(current_user)]
+
+
+def admin_user(user: CurrentUser, session: Annotated[Session, Depends(get_session)]) -> Usuario:
+    """Dependencia: el usuario de la sesión, si es administrador. 403 si no lo es."""
+    if session.get(Rol, user.id_rol).rol != ADMIN_ROLE:
+        raise HTTPException(403, "Solo un administrador puede hacer esto")
+    return user
+
+
+AdminUser = Annotated[Usuario, Depends(admin_user)]

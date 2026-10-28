@@ -209,7 +209,7 @@ def model_user_id(session: Session) -> int:
     ).first()
 
 
-def save(session: Session, reading: Reading, image_key: str) -> DocumentResult:
+def save(session: Session, reading: Reading, image_key: str, folder_id: int | None = None) -> DocumentResult:
     """Guarda la fila y una copia del archivo original con el nombre TIPO_RUT_FOLIO (columna imagen)."""
     code = TYPE_CODES[reading.doc_type]
     values = row_values(reading)
@@ -220,6 +220,7 @@ def save(session: Session, reading: Reading, image_key: str) -> DocumentResult:
         id_tipo_documento=type_ids(session)[code],
         imagen=name,
         id_usuario=model_user_id(session),
+        id_carpeta=folder_id,
     )
     images.store_copy(image_key, name)
     session.add(row)
@@ -320,9 +321,14 @@ def _segment(
 
 
 def process_files(
-    session: Session, files: list[FileInput], progress: Callable[[str], None] | None = None
+    session: Session,
+    files: list[FileInput],
+    progress: Callable[[str], None] | None = None,
+    folder_id: int | None = None,
 ) -> list[FileOutcome]:
     """Procesa archivos ya guardados en el almacenamiento, con las llamadas a la IA en tandas.
+
+    Los documentos guardados quedan en la carpeta folder_id (vacía si los archivos se subieron sueltos).
 
     Devuelve, por archivo, qué pasó con cada documento (o por qué no se pudo procesar). Lanza
     AIUnavailable si no se puede usar la IA.
@@ -369,7 +375,7 @@ def process_files(
                 result = DocumentResult(TYPE_CODES[document.doc_type], "ERROR", mensaje=str(failed))
             else:
                 reading = build_reading(document.doc_type, first.parsed, second.parsed if second else None)
-                result = save(session, reading, files[index].imagen)
+                result = save(session, reading, files[index].imagen, folder_id)
             outcomes[index].documentos.append(result)
             record_calls(session, "LECTURA_1", first, result.id)
             record_calls(session, "LECTURA_2", second, result.id)

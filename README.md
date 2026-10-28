@@ -26,9 +26,10 @@ Se define **solo** con los archivos SQL de [`db/`](db/), que se aplican en orden
 | Tabla | Qué guarda |
 |---|---|
 | `roles` | `MODELO` (solo el usuario de la IA), `REVISOR` y `ADMINISTRADOR` |
-| `usuarios` | Nombre, email (único), hash de la contraseña y rol. Incluye el usuario "Modelo IA", que no puede iniciar sesión |
+| `usuarios` | Nombre, email (único), hash de la contraseña, rol y `activo` (db/010: un perfil desactivado no inicia sesión). Incluye el usuario "Modelo IA", que no puede iniciar sesión |
 | `tipos_documentos` | `id` y `documento`, con solo 3 registros: FC (factura electrónica), CI (control interno), GD (guía de despacho) |
-| `documentos_procesados` | Una fila por documento: RUT del proveedor, folio, fecha, firma, neto, IVA, impuestos (otros impuestos + exento), total, observaciones (`LEGIBLE`, `NO_LEGIBLE`, `DESCUADRE`), tipo, imagen original, `id_usuario` (el Modelo IA o la persona que lo corrigió), `campos_faltantes` y `campos_dudosos`, `revisado_en` y `requiere_revision` (se calcula sola: no legible o descuadre, y nadie lo ha revisado) |
+| `carpetas` | Cada carpeta subida (db/009): nombre, fecha de subida y quién la subió. El nombre puede repetirse: cada subida es una carpeta distinta |
+| `documentos_procesados` | Una fila por documento: RUT del proveedor, folio, fecha, firma, neto, IVA, impuestos (otros impuestos + exento), total, observaciones (`LEGIBLE`, `NO_LEGIBLE`, `DESCUADRE`), tipo, imagen original, `id_usuario` (el Modelo IA o la persona que lo corrigió), `campos_faltantes` y `campos_dudosos`, `revisado_en`, `id_carpeta` (vacío si se subió suelto) y `requiere_revision` (se calcula sola: no legible o descuadre, y nadie lo ha revisado) |
 
 - Los documentos desconocidos (boletas, notas de crédito…) se descartan: no se guardan.
 - El mismo documento (tipo, RUT y folio) no se guarda dos veces; no aplica al RUT ilegible `1-9`.
@@ -82,6 +83,7 @@ python -m venv .venv
 pip install -r requirements-dev.txt
 python -m app.db.schema
 python -m app.usuarios crear     # tu usuario (pide nombre, email, rol y contraseña)
+                                 # o define ADMIN_EMAIL y ADMIN_PASSWORD en .env y: python -m app.usuarios admin-inicial
 uvicorn app.main:app --reload    # http://localhost:8000/docs
 ```
 
@@ -99,12 +101,14 @@ npm run dev                      # http://localhost:5173
 **Interfaz** (pide iniciar sesión):
 - *Inicio:* el día (hoy o el que se elija) con los documentos subidos, los procesados por la IA,
   los que requieren revisión humana y los revisados por una persona.
-- *Subir:* imágenes o PDF y el avance de cada trabajo (guardado, descartado, duplicado o error).
+- *Subir:* imágenes o PDF sueltos, (hasta 50) o una carpeta completa (hasta 500, con subcarpetas; se ignora lo que no sea imagen o PDF), y el avance de cada trabajo (guardado, descartado, duplicado o error).
 - *Revisión:* los pendientes, los más antiguos primero. Al abrir uno: la imagen a la izquierda y a
   la derecha el formulario con lo que leyó la IA, los campos que faltan (rojo) y los dudosos
   (ámbar), y la suma de montos en vivo. Al guardar pasa al siguiente pendiente.
 - *Documentos:* totales, filtros por tipo, observaciones y "requieren revisión", búsqueda por RUT o
-  folio, y el detalle de cada documento (quién lo procesó o revisó).
+  folio, filtro por carpeta, y el detalle de cada documento (quién lo procesó o revisó).
+- *Perfiles* (solo administradores): los perfiles del sistema; crear uno, cambiar su rol y
+  activarlo o desactivarlo. Un perfil desactivado no puede iniciar sesión y sus sesiones abiertas se cierran.
 - *Métricas* (7, 30 o 90 días): tokens de entrada y salida por día, costo estimado (total y por
   documento leído) y por etapa; % de documentos legibles sin intervención, pendientes y revisados,
   campos que más faltan o generan dudas; tandas, espera de Claude y tasa de errores.
@@ -117,16 +121,21 @@ Todas las rutas, salvo `/health` y `/auth/login`, piden `Authorization: Bearer <
 |---|---|---|
 | POST | `/auth/login` | Email y contraseña → token de sesión y datos del usuario |
 | GET | `/auth/yo` | El usuario de la sesión |
-| POST | `/trabajos` | Sube imágenes o PDF (`files`). Responde al instante con el trabajo y procesa en segundo plano, de a un trabajo por vez |
+| POST | `/trabajos` | Sube imágenes o PDF (`files`); con `carpeta` (su nombre) la subida queda como una carpeta nueva y sus documentos asociados a ella. Responde al instante con el trabajo y procesa en segundo plano, de a un trabajo por vez |
 | GET | `/trabajos` | Trabajos recientes (desde que arrancó el servidor) |
 | GET | `/trabajos/{id}` | Avance: estado de cada archivo y qué pasó con cada documento (guardado, descartado, duplicado o error) |
-| GET | `/documentos` | Documentos (`orden`: `recientes` o `antiguos`). Filtros: `tipo`, `observaciones`, `requiere_revision`, `q` (RUT o folio), `limite`, `desde` |
+| GET | `/documentos` | Documentos (`orden`: `recientes` o `antiguos`). Filtros: `tipo`, `observaciones`, `requiere_revision`, `carpeta` (id), `q` (RUT o folio), `limite`, `desde` |
+| GET | `/carpetas` | Carpetas subidas, la más reciente primero, con sus documentos guardados y cuántos requieren revisión |
 | GET | `/documentos/resumen` | Totales por observaciones y por tipo, y cuántos requieren revisión |
 | GET | `/documentos/dia` | Totales de un día (`fecha`, por defecto hoy en `TIMEZONE`): subidos, procesados por la IA, pendientes y revisados |
 | GET | `/documentos/{id}` | Un documento |
 | PUT | `/documentos/{id}/correccion` | Una persona corrige o confirma los datos. Valida RUT y suma; un descuadre se guarda solo con `confirmar_descuadre` |
 | GET | `/documentos/{id}/imagen` | El archivo original del que salió |
 | GET | `/tipos-documentos` | FC, CI y GD |
+| GET | `/usuarios` | Perfiles (sin el Modelo IA). **Solo administradores**, como las tres siguientes |
+| GET | `/usuarios/roles` | REVISOR y ADMINISTRADOR |
+| POST | `/usuarios` | Crea un perfil activo (nombre, email, rol y contraseña de al menos 8 caracteres) |
+| PATCH | `/usuarios/{id}` | Cambia el rol o activa/desactiva. Un administrador no puede desactivarse ni quitarse el rol a sí mismo |
 | GET | `/metricas` | Uso de IA (tokens, costo por día y por etapa) y rendimiento de la IA y del sistema de los últimos `dias` |
 
 El avance de los trabajos vive en memoria: si el servidor se reinicia se pierde, pero los documentos

@@ -1,4 +1,4 @@
-"""Consulta y corrección de documentos_procesados, totales del día y tipos de documento."""
+"""Consulta y corrección de documentos_procesados, totales del día, carpetas y tipos de documento."""
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import PurePosixPath
@@ -14,7 +14,7 @@ from sqlmodel import col, select
 from app.api.deps import SessionDep
 from app.auth import CurrentUser
 from app.core.config import settings
-from app.models import DocumentoProcesado, TipoDocumento, Usuario
+from app.models import Carpeta, DocumentoProcesado, TipoDocumento, Usuario
 from app.pipeline import images
 from app.pipeline.normalize import parse_document_number, parse_rut
 from app.storage import document_key, get_storage
@@ -49,6 +49,17 @@ class DocumentoRead(BaseModel):
     usuario: str  # "Modelo IA" o la persona que lo corrigió
     revisado_en: datetime | None
     creado_en: datetime
+    id_carpeta: int | None
+    carpeta: str | None  # nombre de la carpeta subida; vacío si se subió suelto
+
+
+class CarpetaRead(BaseModel):
+    id: int
+    nombre: str
+    subida_en: datetime
+    usuario: str  # quién la subió
+    documentos: int  # documentos guardados de esta carpeta
+    requieren_revision: int
 
 
 class DocumentoPage(BaseModel):
@@ -90,14 +101,15 @@ class Correccion(BaseModel):
 
 def _query():
     return (
-        select(DocumentoProcesado, TipoDocumento.documento, Usuario.nombre)
+        select(DocumentoProcesado, TipoDocumento.documento, Usuario.nombre, Carpeta.nombre)
         .join(TipoDocumento, col(TipoDocumento.id) == DocumentoProcesado.id_tipo_documento)
         .join(Usuario, col(Usuario.id) == DocumentoProcesado.id_usuario)
+        .outerjoin(Carpeta, col(Carpeta.id) == DocumentoProcesado.id_carpeta)
     )
 
 
-def _read(row: DocumentoProcesado, tipo: str, usuario: str) -> DocumentoRead:
-    return DocumentoRead(tipo=tipo, usuario=usuario, **row.model_dump(exclude={"id_tipo_documento"}))
+def _read(row: DocumentoProcesado, tipo: str, usuario: str, carpeta: str | None) -> DocumentoRead:
+    return DocumentoRead(tipo=tipo, usuario=usuario, carpeta=carpeta, **row.model_dump(exclude={"id_tipo_documento"}))
 
 
 def _local_day(column):
@@ -117,6 +129,7 @@ def list_documents(
     observaciones: str | None = Query(None, description="LEGIBLE, NO_LEGIBLE o DESCUADRE"),
     requiere_revision: bool | None = None,
     q: str | None = Query(None, description="Busca en RUT y folio"),
+    carpeta: int | None = Query(None, description="Id de la carpeta subida"),
     orden: Literal["recientes", "antiguos"] = "recientes",
     limite: int = Query(50, ge=1, le=500),
     desde: int = Query(0, ge=0),
@@ -129,6 +142,8 @@ def list_documents(
         query = query.where(DocumentoProcesado.observaciones == observaciones.upper())
     if requiere_revision is not None:
         query = query.where(DocumentoProcesado.requiere_revision == requiere_revision)
+    if carpeta is not None:
+        query = query.where(DocumentoProcesado.id_carpeta == carpeta)
     if q and q.strip():
         term = f"%{q.strip()}%"
         query = query.where(or_(col(DocumentoProcesado.folio).ilike(term), col(DocumentoProcesado.rut_proveedor).ilike(term)))
@@ -138,6 +153,25 @@ def list_documents(
         order = tuple(c.desc() for c in order)
     rows = session.exec(query.order_by(*order).offset(desde).limit(limite)).all()
     return DocumentoPage(total=total, documentos=[_read(*row) for row in rows])
+
+
+@router.get("/carpetas", response_model=list[CarpetaRead])
+def list_folders(session: SessionDep, limite: int = Query(100, ge=1, le=500)):
+    """Las carpetas subidas, la más reciente primero, con cuántos documentos se guardaron de cada una."""
+    documents = func.count(DocumentoProcesado.id)
+    pending = func.count(DocumentoProcesado.id).filter(DocumentoProcesado.requiere_revision)
+    rows = session.exec(
+        select(Carpeta, Usuario.nombre, documents, pending)
+        .join(Usuario, col(Usuario.id) == Carpeta.id_usuario)
+        .outerjoin(DocumentoProcesado, col(DocumentoProcesado.id_carpeta) == Carpeta.id)
+        .group_by(col(Carpeta.id), col(Usuario.nombre))
+        .order_by(col(Carpeta.subida_en).desc(), col(Carpeta.id).desc())
+        .limit(limite)
+    ).all()
+    return [
+        CarpetaRead(id=f.id, nombre=f.nombre, subida_en=f.subida_en, usuario=user, documentos=n, requieren_revision=p)
+        for f, user, n, p in rows
+    ]
 
 
 @router.get("/documentos/resumen", response_model=Resumen)
@@ -191,7 +225,7 @@ def day(session: SessionDep, fecha: date | None = Query(None, description="Por d
     )
 
 
-def _get(session: SessionDep, documento_id: int) -> tuple[DocumentoProcesado, str, str]:
+def _get(session: SessionDep, documento_id: int) -> tuple[DocumentoProcesado, str, str, str | None]:
     found = session.exec(_query().where(DocumentoProcesado.id == documento_id)).first()
     if found is None:
         raise HTTPException(404, "Documento no encontrado")
@@ -210,7 +244,7 @@ def correct(documento_id: int, data: Correccion, session: SessionDep, user: Curr
     Se aplican las mismas reglas que al procesar: RUT con dígito verificador correcto y
     neto + IVA + impuestos = total. Si no cuadra, solo se guarda si la persona confirma el descuadre.
     """
-    row, _, _ = _get(session, documento_id)
+    row, *_ = _get(session, documento_id)
     rut = parse_rut(data.rut_proveedor)
     if rut.value is None:
         raise HTTPException(422, f"RUT no válido: {rut.reason}")
@@ -267,7 +301,7 @@ def correct(documento_id: int, data: Correccion, session: SessionDep, user: Curr
 @router.get("/documentos/{documento_id}/imagen")
 def get_image(documento_id: int, session: SessionDep):
     """El archivo (imagen o PDF) del que salió el documento, con su nombre TIPO_RUT_FOLIO."""
-    row, _, _ = _get(session, documento_id)
+    row, *_ = _get(session, documento_id)
     storage = get_storage()
     key = document_key(row.imagen)
     if not storage.exists(key):

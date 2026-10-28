@@ -17,9 +17,10 @@ LEFT = {"x": 0, "y": 0, "w": 0.5, "h": 1}
 RIGHT = {"x": 0.5, "y": 0, "w": 0.5, "h": 1}
 
 
-def _upload(client, *files):
+def _upload(client, *files, carpeta=None):
     """Sube y devuelve el trabajo terminado (en los tests, el segundo plano corre antes de responder)."""
-    response = client.post("/trabajos", files=[("files", f) for f in files])
+    data = {"carpeta": carpeta} if carpeta is not None else None
+    response = client.post("/trabajos", files=[("files", f) for f in files], data=data)
     assert response.status_code == 202, response.text
     return client.get(f"/trabajos/{response.json()['id']}").json()
 
@@ -252,3 +253,53 @@ def test_document_sharing_a_page_is_read_from_its_crop_and_the_full_page(client,
     fake_ai.extractions = [extraction(DOCUMENT_NUMBER=reading("N° 1")), extraction(DOCUMENT_NUMBER=reading("N° 2"))]
     _upload(client, _image())
     assert [call["images"] for call in fake_ai.extraction_calls] == [2, 2]
+
+
+def test_folder_upload_groups_its_documents(client, fake_ai):
+    fake_ai.pages = {1: INVOICE}
+    fake_ai.extractions = [extraction(), extraction(DOCUMENT_NUMBER=reading("N° 2"))]
+    job = _upload(client, ("Septiembre/1.png", *_image(1)[1:]), ("Septiembre/sub/2.png", *_image(2)[1:]), carpeta=" Septiembre ")
+    assert job["carpeta"] == "Septiembre" and job["id_carpeta"] is not None
+    docs = _documents(client, carpeta=job["id_carpeta"])
+    assert {d["folio"] for d in docs} == {"000123", "2"}
+    assert {(d["id_carpeta"], d["carpeta"]) for d in docs} == {(job["id_carpeta"], "Septiembre")}
+
+    (folder,) = client.get("/carpetas").json()
+    assert {k: folder[k] for k in ("id", "nombre", "usuario", "documentos", "requieren_revision")} == {
+        "id": job["id_carpeta"], "nombre": "Septiembre", "usuario": "Rita Revisora", "documentos": 2, "requieren_revision": 0,
+    }
+
+
+def test_loose_files_have_no_folder_and_a_repeated_name_is_a_new_folder(client, fake_ai):
+    fake_ai.pages = {1: INVOICE}
+    loose = _upload(client, _image(1))
+    assert loose["id_carpeta"] is None
+    assert _documents(client)[0]["id_carpeta"] is None
+
+    first = _upload(client, _image(2), carpeta="Agosto")
+    second = _upload(client, _image(3), carpeta="Agosto")  # el mismo documento: queda como duplicado
+    assert first["id_carpeta"] != second["id_carpeta"]
+    assert second["archivos"][0]["documentos"][0]["resultado"] == "DUPLICADO"
+    folders = client.get("/carpetas").json()
+    assert [(f["nombre"], f["documentos"]) for f in folders] == [("Agosto", 0), ("Agosto", 0)]
+
+
+def test_invalid_folder_upload_does_not_create_the_folder(client):
+    response = client.post("/trabajos", files=[("files", ("a.txt", b"hola", "text/plain"))], data={"carpeta": "Mala"})
+    assert response.status_code == 415
+    assert client.get("/carpetas").json() == []
+
+
+def test_a_folder_accepts_more_files_than_a_loose_upload(client, fake_ai, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "MAX_FILES_PER_SUBMISSION", 2)
+    monkeypatch.setattr(settings, "MAX_FILES_PER_FOLDER", 3)
+    fake_ai.pages = {1: INVOICE}
+    three = [("files", _image(n)) for n in (1, 2, 3)]
+    loose = client.post("/trabajos", files=three)
+    assert loose.status_code == 422 and "carpeta" in loose.json()["detail"]
+    assert client.post("/trabajos", files=three, data={"carpeta": "Grande"}).status_code == 202
+    too_many = client.post("/trabajos", files=[*three, ("files", _image(4))], data={"carpeta": "Enorme"})
+    assert too_many.status_code == 422 and "500" not in too_many.json()["detail"]
+    assert [f["nombre"] for f in client.get("/carpetas").json()] == ["Grande"]

@@ -15,6 +15,7 @@ normal del contenedor se borra en cada despliegue.
 | `CLAUDE_KEY` | Sí | Tu clave de la API de Claude (Anthropic) |
 | `STORAGE_DIR` | Sí | Ruta montada del volumen, por ejemplo `/data/storage` |
 | `SECRET_KEY` | Sí | Texto largo y secreto que firma las sesiones (sin ella, se cierran en cada reinicio) |
+| `ADMIN_EMAIL` y `ADMIN_PASSWORD` | Sí, la primera vez | Administrador inicial: se crea al arrancar si su email no existe (`ADMIN_NOMBRE` opcional). Después, los perfiles se administran en la pantalla *Perfiles* |
 | `AI_MODEL` | No | Por defecto `claude-haiku-5-5` |
 | `AI_BATCH` | No | `true` (por defecto): Message Batches, mitad de precio y respuesta asíncrona; `false`: una llamada por solicitud |
 | `TOTAL_TOLERANCE_CLP` | No | Diferencia permitida en la suma de montos (por defecto `0`) |
@@ -29,8 +30,8 @@ que ya existe.
 2. **+ New → Database → PostgreSQL**.
 3. En el servicio de la app → **Settings → Volumes → Add volume**, montado en `/data`.
 4. En **Variables**: `DATABASE_URL`, `CLAUDE_KEY`, `STORAGE_DIR=/data/storage` y
-   `SECRET_KEY`. Después del primer despliegue, crea los usuarios con `python -m app.usuarios crear`
-   (en la consola del servicio).
+   `SECRET_KEY`, `ADMIN_EMAIL` y `ADMIN_PASSWORD`. Con ese administrador se inicia sesión y se crean
+   los demás perfiles en *Perfiles*.
 5. **Settings → Networking → Generate Domain**.
 
 Comprobar: `https://tu-app/health` → `{"status":"ok"}` y `https://tu-app/docs` (pide la contraseña).

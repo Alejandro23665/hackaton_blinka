@@ -20,6 +20,7 @@ from sqlalchemy.engine import Engine
 from sqlmodel import Session
 
 from app.core.config import settings
+from app.models import Carpeta
 from app.pipeline.preprocess import detect_type
 from app.pipeline.process import AIUnavailable, DocumentResult, FileInput, process_files
 from app.storage import get_storage, original_key
@@ -56,6 +57,9 @@ class Job:
     id: str
     creado_en: datetime
     archivos: list[JobFile]
+    # La carpeta subida (db/009), si los archivos vienen de una
+    id_carpeta: int | None = None
+    carpeta: str | None = None
     estado: str = "EN_COLA"  # EN_COLA, EN_PROCESO, TERMINADO o DETENIDO
     mensaje: str | None = None
     # Qué está haciendo ahora, por ejemplo "Leyendo documentos. Esperando a Claude…"
@@ -72,12 +76,16 @@ _jobs_lock = threading.Lock()
 _run_lock = threading.Lock()
 
 
-def _validate(uploads: list[Upload]) -> list[tuple[Upload, str, str, str]]:
+def _validate(uploads: list[Upload], folder: bool) -> list[tuple[Upload, str, str, str]]:
     """Comprueba todo antes de guardar nada: un archivo inválido rechaza la subida entera."""
     if not uploads:
         raise InvalidUpload("No se recibió ningún archivo", 422)
-    if len(uploads) > settings.MAX_FILES_PER_SUBMISSION:
-        raise InvalidUpload(f"Máximo {settings.MAX_FILES_PER_SUBMISSION} archivos por subida", 422)
+    if folder and len(uploads) > settings.MAX_FILES_PER_FOLDER:
+        raise InvalidUpload(f"Máximo {settings.MAX_FILES_PER_FOLDER} archivos por carpeta", 422)
+    if not folder and len(uploads) > settings.MAX_FILES_PER_SUBMISSION:
+        raise InvalidUpload(
+            f"Máximo {settings.MAX_FILES_PER_SUBMISSION} archivos sueltos por subida; para más, sube una carpeta", 422
+        )
     max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
     checked = []
     for upload in uploads:
@@ -93,12 +101,17 @@ def _validate(uploads: list[Upload]) -> list[tuple[Upload, str, str, str]]:
     return checked
 
 
-def create_job(uploads: list[Upload]) -> Job:
+def validate(uploads: list[Upload], folder: bool = False) -> None:
+    """Rechaza la subida si algún archivo no sirve (o son demasiados), antes de crear nada."""
+    _validate(uploads, folder)
+
+
+def create_job(uploads: list[Upload], folder: Carpeta | None = None) -> Job:
     """Valida y guarda los originales. El mismo archivo se guarda una sola vez (por su huella)."""
     storage = get_storage()
     files = []
     seen: set[str] = set()
-    for upload, content_type, extension, sha in _validate(uploads):
+    for upload, content_type, extension, sha in _validate(uploads, folder is not None):
         if sha in seen:
             continue
         seen.add(sha)
@@ -106,7 +119,13 @@ def create_job(uploads: list[Upload]) -> Job:
         if not storage.exists(key):
             storage.put(key, upload.data)
         files.append(JobFile(nombre=upload.name[:255], imagen=key, tipo_contenido=content_type))
-    job = Job(id=uuid.uuid4().hex, creado_en=datetime.now(timezone.utc), archivos=files)
+    job = Job(
+        id=uuid.uuid4().hex,
+        creado_en=datetime.now(timezone.utc),
+        archivos=files,
+        id_carpeta=folder.id if folder else None,
+        carpeta=folder.nombre if folder else None,
+    )
     with _jobs_lock:
         _jobs[job.id] = job
         while len(_jobs) > MAX_JOBS:
@@ -141,7 +160,7 @@ def run_job(engine: Engine, job_id: str) -> None:
         files = [FileInput(item.imagen, item.tipo_contenido) for item in job.archivos]
         with Session(engine) as session:
             try:
-                outcomes = process_files(session, files, progress)
+                outcomes = process_files(session, files, progress, job.id_carpeta)
             except AIUnavailable as exc:
                 for item in job.archivos:
                     item.estado, item.mensaje = "ERROR", "No se procesó: la IA no está disponible."

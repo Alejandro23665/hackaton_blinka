@@ -33,6 +33,8 @@ def login(data: LoginIn, session: SessionDep):
     if found is None:
         raise HTTPException(401, "Email o contraseña incorrectos")
     user, role = found
+    if not user.activo:
+        raise HTTPException(403, "Tu perfil está desactivado. Pide a un administrador que lo active.")
     return LoginOut(
         token=create_token(user.id),
         usuario=UsuarioRead(id=user.id, nombre=user.nombre, email=user.email, rol=role),

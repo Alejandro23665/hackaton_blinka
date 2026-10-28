@@ -32,4 +32,4 @@ USER blinka
 EXPOSE 8000
 # Sin DATABASE_URL la app usaría el valor de desarrollo (localhost) y fallaría con un traceback
 # confuso: se avisa con un mensaje claro. Después, tablas (solo si la base está vacía) y servidor.
-CMD ["sh", "-c", "if [ -z \"$DATABASE_URL\" ]; then echo 'ERROR: falta la variable DATABASE_URL. En Railway o Render, conectala a la base Postgres del proyecto (ver docs/04-despliegue.md).' >&2; exit 1; fi; python -m app.db.schema && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
+CMD ["sh", "-c", "if [ -z \"$DATABASE_URL\" ]; then echo 'ERROR: falta la variable DATABASE_URL. En Railway o Render, conectala a la base Postgres del proyecto (ver docs/04-despliegue.md).' >&2; exit 1; fi; python -m app.db.schema && python -m app.usuarios admin-inicial && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]

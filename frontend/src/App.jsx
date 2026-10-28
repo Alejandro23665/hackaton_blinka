@@ -9,6 +9,7 @@ import Documents from './views/Documents'
 import Home from './views/Home'
 import Login from './views/Login'
 import Metrics from './views/Metrics'
+import Profiles from './views/Profiles'
 import Review from './views/Review'
 import Upload from './views/Upload'
 
@@ -18,7 +19,10 @@ const TABS = [
   { section: 'revision', label: 'Revisión', icon: 'alert' },
   { section: 'documentos', label: 'Documentos', icon: 'file' },
   { section: 'metricas', label: 'Métricas', icon: 'chart' },
+  { section: 'perfiles', label: 'Perfiles', icon: 'user', admin: true },
 ]
+
+const ADMIN_ROLE = 'ADMINISTRADOR'
 
 function Logo() {
   return (
@@ -54,7 +58,8 @@ function UserMenu({ user, onLogout }) {
   )
 }
 
-function View({ section, id }) {
+function View({ section, id, user }) {
+  if (section === 'perfiles' && user.rol === ADMIN_ROLE) return <Profiles user={user} />
   if (section === 'documentos') return id ? <DocumentDetail id={id} /> : <Documents />
   if (section === 'revision') return id ? <Correct id={id} /> : <Review />
   if (section === 'subir') return <Upload />
@@ -105,14 +110,17 @@ export default function App() {
     )
   }
 
+  // Perfiles solo la ve un administrador
+  const tabs = TABS.filter((tab) => !tab.admin || user.rol === ADMIN_ROLE)
+
   return (
     <div className="min-h-screen bg-surface/40">
       <header className="sticky top-0 z-10 border-b border-line bg-canvas/90 backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
           <Logo />
           <nav aria-label="Secciones" className="flex gap-1 rounded-full border border-line bg-surface p-1">
-            {TABS.map((tab) => {
-              const active = section === tab.section || (tab.section === 'inicio' && !TABS.some((t) => t.section === section))
+            {tabs.map((tab) => {
+              const active = section === tab.section || (tab.section === 'inicio' && !tabs.some((t) => t.section === section))
               return (
                 <a
                   key={tab.section}
@@ -134,7 +142,7 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-7xl px-4 pt-6 pb-12 sm:px-6 lg:px-8 lg:pt-8">
-        <View section={section} id={id} />
+        <View section={section} id={id} user={user} />
       </main>
     </div>
   )

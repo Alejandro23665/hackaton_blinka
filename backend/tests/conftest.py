@@ -108,7 +108,7 @@ def engine():
 def clean_db(engine):
     # Los tipos, los roles y el usuario "Modelo IA" vienen de los archivos SQL: no se borran
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE llamadas_ia, documentos_procesados RESTART IDENTITY"))
+        conn.execute(text("TRUNCATE llamadas_ia, documentos_procesados, carpetas RESTART IDENTITY"))
         conn.execute(text("DELETE FROM usuarios WHERE email <> 'modelo-ia@sistema.local'"))
         conn.execute(text("DELETE FROM roles WHERE rol NOT IN ('MODELO', 'REVISOR', 'ADMINISTRADOR')"))
     return engine

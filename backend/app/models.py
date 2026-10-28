@@ -12,6 +12,8 @@ from sqlmodel import Field, SQLModel
 
 # Rol del usuario que representa a la IA (db/005): sus documentos no los revisó una persona
 MODEL_ROLE = "MODELO"
+# Rol que administra los perfiles
+ADMIN_ROLE = "ADMINISTRADOR"
 
 
 class Rol(SQLModel, table=True):
@@ -30,6 +32,7 @@ class Usuario(SQLModel, table=True):
     email: str
     contrasena_hash: str
     id_rol: int = Field(foreign_key="roles.id")
+    activo: bool = True  # un perfil desactivado no puede iniciar sesión (db/010)
     creado_en: datetime | None = Field(default=None, sa_column_kwargs={"server_default": "now()"})
 
 
@@ -38,6 +41,17 @@ class TipoDocumento(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     documento: str  # FC, CI o GD
+
+
+class Carpeta(SQLModel, table=True):
+    """Una carpeta subida (db/009): agrupa los documentos que salen de sus archivos y subcarpetas."""
+
+    __tablename__ = "carpetas"
+
+    id: int | None = Field(default=None, primary_key=True)
+    nombre: str  # puede repetirse: cada subida es una carpeta distinta
+    subida_en: datetime | None = Field(default=None, sa_column_kwargs={"server_default": "now()"})
+    id_usuario: int = Field(foreign_key="usuarios.id")  # quién la subió
 
 
 class DocumentoProcesado(SQLModel, table=True):
@@ -61,6 +75,7 @@ class DocumentoProcesado(SQLModel, table=True):
     campos_faltantes: list[str] = Field(default_factory=list, sa_column=Column(ARRAY(Text), nullable=False))
     campos_dudosos: list[str] = Field(default_factory=list, sa_column=Column(ARRAY(Text), nullable=False))
     revisado_en: datetime | None = None  # cuándo lo revisó una persona
+    id_carpeta: int | None = Field(default=None, foreign_key="carpetas.id")  # vacío si se subió suelto
     creado_en: datetime | None = Field(default=None, sa_column_kwargs={"server_default": "now()"})
     # La calcula la base: nunca se escribe desde aquí
     requiere_revision: bool | None = Field(

@@ -72,11 +72,22 @@ export const api = {
   },
   jobs: {
     list: () => request('/trabajos'),
-    create: (files) => {
+    /** carpeta: nombre de la carpeta subida (vacío para archivos sueltos). */
+    create: (files, carpeta) => {
       const form = new FormData()
-      files.forEach((file) => form.append('files', file))
+      // En una carpeta, cada archivo va con su ruta dentro de ella (Septiembre/sub/1.png)
+      files.forEach((file) => form.append('files', file, file.webkitRelativePath || file.name))
+      if (carpeta) form.append('carpeta', carpeta)
       return request('/trabajos', { method: 'POST', body: form })
     },
+  },
+  folders: () => request('/carpetas'),
+  /** Perfiles: solo para administradores. */
+  users: {
+    list: () => request('/usuarios'),
+    roles: () => request('/usuarios/roles'),
+    create: (data) => request('/usuarios', { method: 'POST', body: data }),
+    update: (id, change) => request(`/usuarios/${id}`, { method: 'PATCH', body: change }),
   },
   metrics: (dias) => request('/metricas', { params: { dias } }),
   documents: {

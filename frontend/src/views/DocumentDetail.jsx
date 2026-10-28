@@ -82,6 +82,7 @@ export default function DocumentDetail({ id }) {
           </h2>
           <p className="mt-1 text-xs text-subtle">
             Guardado el {dateTime(d.creado_en)} · id {d.id} ·{' '}
+            {d.carpeta && `carpeta ${d.carpeta} · `}
             {d.revisado_en ? `revisado por ${d.usuario} el ${dateTime(d.revisado_en)}` : `procesado por ${d.usuario}`}
           </p>
         </div>

@@ -47,7 +47,15 @@ function Job({ job }) {
           <Icon name="upload" size={17} />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-sm font-medium text-ink">{dateTime(job.creado_en)}</span>
+          <span className="block text-sm font-medium text-ink">
+            {job.carpeta && (
+              <span className="mr-2 inline-flex items-center gap-1 text-brand-700">
+                <Icon name="folder" size={14} />
+                {job.carpeta} ·
+              </span>
+            )}
+            {dateTime(job.creado_en)}
+          </span>
           <span className="block text-xs text-muted">
             {job.archivos.length} archivo{job.archivos.length === 1 ? '' : 's'} · {saved} documento
             {saved === 1 ? '' : 's'} guardado{saved === 1 ? '' : 's'}

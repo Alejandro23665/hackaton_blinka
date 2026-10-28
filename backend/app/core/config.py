@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     # Sesiones (inicio de sesión con la tabla usuarios). Sin SECRET_KEY, se cierran al reiniciar
     SECRET_KEY: str | None = None
     SESSION_HOURS: int = 12
+    # Administrador inicial: `python -m app.usuarios admin-inicial` lo crea si su email no existe
+    # (el arranque del contenedor lo ejecuta). La contraseña nunca va en los archivos SQL
+    ADMIN_NOMBRE: str = "Administrador"
+    ADMIN_EMAIL: str | None = None
+    ADMIN_PASSWORD: str | None = None
     # Zona horaria del "día" del dashboard
     TIMEZONE: str = "America/Santiago"
 
@@ -29,6 +34,7 @@ class Settings(BaseSettings):
     # Límites de un lote
     MAX_UPLOAD_MB: int = 25
     MAX_FILES_PER_SUBMISSION: int = 50
+    MAX_FILES_PER_FOLDER: int = 500  # una carpeta subida (con sus subcarpetas)
     MAX_PAGES_PER_FILE: int = 300
 
     # Imagen de cada página: resolución al convertir PDF y lado máximo (lo que ve la IA)

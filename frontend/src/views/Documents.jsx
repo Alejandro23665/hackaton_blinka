@@ -4,7 +4,7 @@ import DocumentTable from '../components/DocumentTable'
 import Icon from '../components/icons'
 import { inputClass } from '../components/styles'
 import { Button, Card, Empty, ErrorBox, Loading, Segmented } from '../components/ui'
-import { DOC_TYPES, STATUS } from '../format'
+import { DOC_TYPES, STATUS, dateTime } from '../format'
 import { useLoad } from '../hooks'
 
 const PAGE_SIZE = 50
@@ -26,11 +26,12 @@ function tileCount(key, summary) {
   return summary.por_observaciones[key] ?? 0
 }
 
-/** Bandeja: documentos_procesados con filtros por tipo, observaciones, revisión y búsqueda. */
+/** Bandeja: documentos_procesados con filtros por tipo, observaciones, revisión, carpeta y búsqueda. */
 export default function Documents() {
   const [tipo, setTipo] = useState('')
   const [observaciones, setObservaciones] = useState('')
   const [revision, setRevision] = useState(false)
+  const [carpeta, setCarpeta] = useState('')
   const [search, setSearch] = useState('')
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(0)
@@ -41,10 +42,12 @@ export default function Documents() {
     return () => clearTimeout(timer)
   }, [search])
   // Cualquier filtro nuevo vuelve a la primera página
-  useEffect(() => setPage(0), [tipo, observaciones, revision, query])
+  useEffect(() => setPage(0), [tipo, observaciones, revision, carpeta, query])
 
   const summary = useLoad(() => api.documents.summary())
+  const folders = useLoad(() => api.folders())
   const params = {
+    carpeta,
     tipo,
     observaciones,
     requiere_revision: revision ? 'true' : '',
@@ -54,7 +57,7 @@ export default function Documents() {
   }
   const docs = useLoad(() => api.documents.list(params), JSON.stringify(params))
   const total = docs.data?.total ?? 0
-  const filtered = tipo || observaciones || revision || query
+  const filtered = tipo || observaciones || revision || carpeta || query
 
   function applyTile(tile) {
     setObservaciones(tile.filter.observaciones ?? '')
@@ -134,6 +137,24 @@ export default function Documents() {
               { value: true, label: 'Solo requieren revisión' },
             ]}
           />
+          {folders.data?.length > 0 && (
+            <div className="relative w-full sm:w-72">
+              <Icon name="folder" size={16} className="pointer-events-none absolute top-3 left-3 text-subtle" />
+              <select
+                aria-label="Filtrar por carpeta"
+                value={carpeta}
+                onChange={(e) => setCarpeta(e.target.value)}
+                className={`${inputClass} pl-9`}
+              >
+                <option value="">Todas las carpetas</option>
+                {folders.data.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.nombre} · {dateTime(f.subida_en)} · {f.documentos} doc.
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         <ErrorBox message={docs.error} />

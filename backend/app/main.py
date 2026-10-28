@@ -2,8 +2,8 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import auth, documentos, metricas, trabajos
-from app.auth import current_user
+from app.api import auth, documentos, metricas, trabajos, usuarios
+from app.auth import admin_user, current_user
 from app.core.config import settings
 
 app = FastAPI(title="Procesamiento de documentos", version="0.4.0")
@@ -20,6 +20,8 @@ app.include_router(auth.router)
 app.include_router(trabajos.router, dependencies=[Depends(current_user)])
 app.include_router(documentos.router, dependencies=[Depends(current_user)])
 app.include_router(metricas.router, dependencies=[Depends(current_user)])
+# Perfiles: solo administradores
+app.include_router(usuarios.router, dependencies=[Depends(admin_user)])
 
 
 @app.get("/health")
