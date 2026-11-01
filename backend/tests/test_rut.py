@@ -48,17 +48,17 @@ def test_invalid_ruts_are_rejected_with_the_same_reasons():
     assert "vacío" in parse_rut("0-0").reason
 
 
-def test_document_with_invalid_rut_goes_to_human_review(client, fake_ai):
-    # La IA lee el RUT con seguridad, pero su dígito verificador no corresponde
-    fake_ai.pages = {1: page_response(detected("CONTROL_INTERNO", "CONTROL INTERNO", "2388"))}
+def test_invoice_with_invalid_rut_is_not_legible_without_review(client, fake_ai):
+    # La IA lee el RUT con seguridad, pero su dígito verificador no corresponde y no encaja con el catálogo
+    fake_ai.pages = {1: page_response(detected("FACTURA_ELECTRONICA", "FACTURA ELECTRÓNICA", "2388"))}
     fake_ai.extractions = [extraction(PROVIDER_RUT=reading("76.084.682-5"))]
     client.post("/trabajos", files=[("files", ("a.png", image_bytes(), "image/png"))])
     (doc,) = client.get("/documentos").json()["documentos"]
-    assert (doc["rut_proveedor"], doc["observaciones"], doc["requiere_revision"]) == ("1-9", "NO_LEGIBLE", True)
+    assert (doc["rut_proveedor"], doc["observaciones"], doc["requiere_revision"]) == ("1-9", "NO_LEGIBLE", False)
     assert doc["campos_dudosos"] == ["rut_proveedor"]
     # Al corregir, el revisor tampoco puede guardar un RUT inválido
     fix = {
-        "tipo": "CI", "rut_proveedor": "76.084.682-5", "folio": "2388", "fecha": "2026-10-14", "firma": True,
+        "tipo": "FC", "rut_proveedor": "76.084.682-5", "folio": "2388", "fecha": "2026-10-14", "firma": True,
         "total_neto": 100000, "iva": 19000, "impuestos": None, "total": 119000,
     }
     response = client.put(f"/documentos/{doc['id']}/correccion", json=fix)

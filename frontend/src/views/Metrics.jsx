@@ -1,14 +1,14 @@
 import { useState } from 'react'
 import { api } from '../api'
-import { Card, ErrorBox, Loading, Segmented, Tile, Eyebrow } from '../components/ui'
+import { Card, ErrorBox, Eyebrow, Loading, PageHeader, Segmented } from '../components/ui'
 import { FIELD_LABELS } from '../format'
-import { useLoad } from '../hooks'
+import { useLoad, useViewState } from '../hooks'
 
 // Paleta categórica validada (contraste y daltonismo) sobre fondo claro
 const BLUE = '#2a78d6'
 const ORANGE = '#eb6834'
 const VIOLET = '#6250d6'
-const BRAND = '#6d28d9'
+const BRAND = '#6941c6' // violeta principal de Veriq
 
 const STAGES = { CLASIFICACION: 'Clasificación de páginas', LECTURA_1: 'Primera lectura', LECTURA_2: 'Segunda lectura (verificación)' }
 
@@ -23,11 +23,11 @@ const dayLabel = (iso) =>
 
 function Stat({ label, value, hint, tone = 'text-ink' }) {
   return (
-    <Tile>
+    <div className="bg-canvas p-4">
       <Eyebrow>{label}</Eyebrow>
-      <p className={`mt-1 text-2xl font-semibold tabular ${tone}`}>{value}</p>
-      {hint && <p className="mt-0.5 text-xs text-muted">{hint}</p>}
-    </Tile>
+      <p className={`mt-1.5 text-2xl font-semibold tracking-[-0.02em] tabular ${tone}`}>{value}</p>
+      {hint && <p className="mt-0.5 text-xs leading-relaxed text-muted">{hint}</p>}
+    </div>
   )
 }
 
@@ -152,29 +152,28 @@ const TOKEN_SERIES = [
 
 /** Métricas de uso de la IA (tokens y costo) y de rendimiento de la IA y del sistema. */
 export default function Metrics() {
-  const [days, setDays] = useState(30)
+  const [days, setDays] = useViewState('metricas.dias', 30)
   const data = useLoad(() => api.metrics(days), days)
   const m = data.data
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-ink">Métricas</h1>
-          <p className="mt-0.5 text-[13px] text-muted">
-            {m ? `Del ${dayLabel(m.periodo.desde)} al ${dayLabel(m.periodo.hasta)}` : 'Uso de la IA y rendimiento'}
-          </p>
-        </div>
-        <Segmented
-          value={days}
-          onChange={setDays}
-          options={[
-            { value: 7, label: '7 días' },
-            { value: 30, label: '30 días' },
-            { value: 90, label: '90 días' },
-          ]}
-        />
-      </div>
+    <div className="space-y-6 lg:space-y-8">
+      <PageHeader
+        eyebrow="Análisis"
+        title="Métricas"
+        meta={m ? `Del ${dayLabel(m.periodo.desde)} al ${dayLabel(m.periodo.hasta)} · uso de la IA y rendimiento` : 'Uso de la IA y rendimiento'}
+        actions={
+          <Segmented
+            value={days}
+            onChange={setDays}
+            options={[
+              { value: 7, label: '7 días' },
+              { value: 30, label: '30 días' },
+              { value: 90, label: '90 días' },
+            ]}
+          />
+        }
+      />
 
       <ErrorBox message={data.error} />
       {!m && data.loading && <Loading rows={6} />}
@@ -185,7 +184,7 @@ export default function Metrics() {
             title="Uso de IA"
             subtitle={`Modelo ${m.uso.modelo}. Costo estimado con sus precios (en tandas, a mitad de precio); las respuestas de la caché no se cobran.`}
           >
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-px overflow-hidden rounded-control bg-line ring-1 ring-line sm:grid-cols-2 lg:grid-cols-4">
               <Stat label="Tokens de entrada" value={tokens(m.uso.tokens_entrada)} hint="Instrucciones e imágenes" />
               <Stat label="Tokens de salida" value={tokens(m.uso.tokens_salida)} hint="Respuestas y razonamiento" />
               <Stat
@@ -204,10 +203,10 @@ export default function Metrics() {
               <DailyBars days={m.uso.por_dia} series={TOKEN_SERIES} format={tokens} />
             </div>
 
-            <div className="-mx-5 mt-6 overflow-x-auto sm:-mx-6">
+            <div className="-mx-5 mt-6 -mb-5 overflow-x-auto border-t border-line sm:-mx-6 sm:-mb-6">
               <table className="w-full min-w-[560px] text-left text-sm">
-                <thead>
-                  <tr className="border-b border-line text-xs text-subtle">
+                <thead className="bg-surface/60">
+                  <tr className="border-b border-line text-[11.5px] tracking-[0.04em] text-subtle uppercase">
                     <th className="px-5 py-2 font-medium sm:pl-6">Etapa</th>
                     <th className="px-3 py-2 text-right font-medium">Llamadas</th>
                     <th className="px-3 py-2 text-right font-medium">Entrada</th>
@@ -238,7 +237,7 @@ export default function Metrics() {
           </Card>
 
           <Card title="Rendimiento de la IA" subtitle="Documentos registrados en el periodo">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-px overflow-hidden rounded-control bg-line ring-1 ring-line sm:grid-cols-2 lg:grid-cols-4">
               <Stat label="Documentos" value={integer.format(m.ia.documentos)} hint="FC, CI y GD guardados" />
               <Stat
                 label="Legibles sin intervención"
@@ -279,7 +278,7 @@ export default function Metrics() {
           </Card>
 
           <Card title="Rendimiento del sistema">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-px overflow-hidden rounded-control bg-line ring-1 ring-line sm:grid-cols-2 lg:grid-cols-4">
               <Stat label="Tandas enviadas" value={integer.format(m.sistema.tandas)} hint="Message Batches" />
               <Stat label="Espera promedio" value={seconds(m.sistema.espera_promedio_s)} hint="Hasta que Claude responde una tanda" />
               <Stat label="Espera máxima" value={seconds(m.sistema.espera_maxima_s)} />

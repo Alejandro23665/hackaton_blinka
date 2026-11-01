@@ -65,17 +65,17 @@ def metrics(session: SessionDep, dias: int = Query(30, ge=1, le=366, description
         since=since,
     )
 
-    # --- Rendimiento de la IA (documentos registrados en el periodo) ---
+    # --- Rendimiento de la IA (documentos registrados en el periodo; sin los desconocidos, que no se leen) ---
     docs_day = DAY.format(col="creado_en")
     (docs,) = _rows(
         session,
         f"""SELECT count(*) AS documentos,
-                   count(*) FILTER (WHERE observaciones = 'LEGIBLE' AND revisado_en IS NULL) AS sin_intervencion,
+                   count(*) FILTER (WHERE NOT escalado AND revisado_en IS NULL) AS sin_intervencion,
                    count(*) FILTER (WHERE revisado_en IS NOT NULL) AS revisados,
                    count(*) FILTER (WHERE requiere_revision) AS pendientes,
                    count(*) FILTER (WHERE requiere_revision AND observaciones = 'NO_LEGIBLE') AS pendientes_no_legibles,
                    count(*) FILTER (WHERE requiere_revision AND observaciones = 'DESCUADRE') AS pendientes_descuadre
-            FROM documentos_procesados WHERE {docs_day} >= :since""",
+            FROM documentos_procesados WHERE {docs_day} >= :since AND observaciones <> 'DESCONOCIDO'""",
         since=since,
     )
     fields = {

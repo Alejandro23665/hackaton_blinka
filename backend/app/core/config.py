@@ -43,11 +43,24 @@ class Settings(BaseSettings):
 
     # Reglas de validación
     TOTAL_TOLERANCE_CLP: int = 0
+    # RUT de cada tipo de documento: se completa aunque no se lea o le falten dígitos. Con otro RUT
+    # leído entero, el documento va a revisión humana
+    CONTROL_INTERNO_RUT: str = "76084682-1"
+    GUIA_ELECTRONICA_RUT: str = "76084682-1"  # título con «Electrónica» (también «Guía de Despacho Electrónica»)
+    GUIA_DESPACHO_RUT: str = "94851000-6"
+    # RUT conocidos de las facturas: un RUT al que le faltan dígitos se completa si encaja con uno solo.
+    # Un RUT completo y válido que no está en la lista se acepta igual
+    KNOWN_INVOICE_RUTS: list[str] = [
+        "96930440-6", "93178000-K", "91144000-8", "99501760-1", "94528000-K",
+        "91041000-8", "88502900-0", "84472400-4", "82623500-4", "78450685-1", "96989120-4",
+    ]
+    # Dígitos que pueden faltar (contando el verificador) para completar un RUT
+    RUT_MAX_MISSING_DIGITS: int = 2
     CLASSIFICATION_MIN_CONFIDENCE: float = 0.7
+    # Confianza de cada dato leído: por debajo de FIELD_DISCARD_CONFIDENCE se descarta (como no leído);
+    # entre ese valor y FIELD_MIN_CONFIDENCE se guarda, pero el documento va a revisión humana
+    FIELD_DISCARD_CONFIDENCE: float = 0.6
     FIELD_MIN_CONFIDENCE: float = 0.8
-    # Con segunda lectura: si las dos lecturas ven exactamente el mismo valor, basta esta seguridad.
-    # Dos lecturas independientes que coinciden pesan más que la seguridad que declara el modelo
-    AGREEMENT_MIN_CONFIDENCE: float = 0.5
 
     # Lectura con Claude (API de Anthropic). La clave va en CLAUDE_KEY
     CLAUDE_KEY: str | None = None

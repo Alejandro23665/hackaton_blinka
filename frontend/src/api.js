@@ -82,6 +82,11 @@ export const api = {
     },
   },
   folders: () => request('/carpetas'),
+  /** Citas: se piden sin sesión desde la página pública; la lista es solo para administradores. */
+  appointments: {
+    create: (data) => request('/citas', { method: 'POST', body: data }),
+    list: () => request('/citas'),
+  },
   /** Perfiles: solo para administradores. */
   users: {
     list: () => request('/usuarios'),
@@ -96,6 +101,8 @@ export const api = {
     day: (fecha) => request('/documentos/dia', { params: { fecha } }),
     get: (id) => request(`/documentos/${id}`),
     correct: (id, data) => request(`/documentos/${id}/correccion`, { method: 'PUT', body: data }),
+    /** Lo acepta tal como está (sin cambios): queda revisado a nombre de quien lo acepta. */
+    accept: (id) => request(`/documentos/${id}/aceptar`, { method: 'POST' }),
     /** El archivo original pide sesión: se descarga con el token y se muestra como blob. */
     image: async (id) => {
       const response = await send(`/documentos/${id}/imagen`)

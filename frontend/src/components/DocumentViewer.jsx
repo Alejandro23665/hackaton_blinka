@@ -32,7 +32,7 @@ export default function DocumentViewer({ id }) {
               href={image.url}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1 text-[13px] font-medium text-brand-700 hover:underline"
+              className="inline-flex h-8 items-center gap-1.5 rounded-control border border-line-strong bg-canvas px-2.5 text-[13px] font-medium text-ink shadow-control transition-colors hover:border-brand-300 hover:text-brand-700"
             >
               Abrir <Icon name="external" size={14} />
             </a>
@@ -44,10 +44,10 @@ export default function DocumentViewer({ id }) {
       {!image.url && !image.error && <Loading rows={4} />}
       {image.url &&
         (isPdf ? (
-          <iframe src={image.url} title="Documento original" className="h-[75vh] w-full rounded-control border border-line" />
+          <iframe src={image.url} title="Documento original" className="h-[60vh] w-full rounded-control border border-line lg:h-[75vh]" />
         ) : (
-          <div className="max-h-[75vh] overflow-auto rounded-control border border-line bg-surface">
-            <img src={image.url} alt="Documento original" className="block h-auto max-w-none" style={{ width: `${zoom * 100}%` }} />
+          <div className="max-h-[60vh] overflow-auto rounded-control bg-surface-strong/70 p-2 ring-1 ring-line ring-inset lg:max-h-[75vh]">
+            <img src={image.url} alt="Documento original" className="block h-auto max-w-none rounded-[4px] shadow-card" style={{ width: `${zoom * 100}%` }} />
           </div>
         ))}
     </Card>

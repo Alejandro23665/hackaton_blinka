@@ -96,14 +96,14 @@ def test_missing_amounts_never_produce_a_mismatch():
     assert "VALIDACION_INCOMPLETA" in _codes(result)
 
 
-def test_illegible_optional_field_is_zero_when_the_rest_adds_up():
-    # 100.000 + 19.000 ya es el total: el exento tapado solo puede ser 0
+def test_illegible_optional_field_is_never_deduced():
+    # Aunque 100.000 + 19.000 ya sea el total, el exento tapado no se registra en 0: queda sin valor
     result = _case(EXEMPT_AMOUNT=ILLEGIBLE)
     assert (result.extraction_status, result.validation_status, result.overall_status) == (
-        "COMPLETA", "CUADRA", "PROCESADO"
+        "COMPLETA", "INCOMPLETA", "NO_LEGIBLE"
     )
-    assert result.amounts["EXEMPT_AMOUNT"] == ZERO and result.amounts["OTHER_TAXES_AMOUNT"] is None
-    assert _codes(result) == ["OPCIONAL_DEDUCIDO"]
+    assert result.amounts["EXEMPT_AMOUNT"] is None
+    assert "OPCIONAL_DEDUCIDO" not in _codes(result)
 
 
 def test_illegible_optional_field_blocks_the_sum_check_when_the_rest_does_not_add_up():
@@ -183,8 +183,9 @@ def test_vat_check_ignores_other_taxes():
     assert (result.overall_status, result.issues) == ("PROCESADO", [])
 
 
-def test_unreadable_tax_line_is_zero_when_the_readable_lines_complete_the_total():
-    # Neto 100.000 + IVA 19.000 + IABA legible 2.000 = 121.000 = total: la línea ilegible solo puede ser 0
+def test_unreadable_tax_line_leaves_the_sum_unverified():
+    # Neto 100.000 + IVA 19.000 + IABA legible 2.000 = 121.000 = total, pero otra línea no se lee: no se
+    # deduce en 0 ni se declara descuadre; la suma queda sin comprobar
     result = validate(
         "FACTURA_ELECTRONICA",
         {"PROVIDER_RUT": "LEIDO", "DOCUMENT_NUMBER": "LEIDO", "ISSUE_DATE": "LEIDO", "NET_AMOUNT": "LEIDO",
@@ -193,7 +194,6 @@ def test_unreadable_tax_line_is_zero_when_the_readable_lines_complete_the_total(
          "NET_AMOUNT": Decimal(100000), "VAT_AMOUNT": Decimal(19000), "OTHER_TAXES_AMOUNT": None,
          "EXEMPT_AMOUNT": None, "TOTAL_AMOUNT": Decimal(121000)},
         ZERO,
-        partial={"OTHER_TAXES_AMOUNT": Decimal(2000)},
     )
-    assert (result.overall_status, result.amounts["OTHER_TAXES_AMOUNT"]) == ("PROCESADO", Decimal(2000))
-    assert "$ 2.000" in result.issues[0]["message"]
+    assert (result.validation_status, result.overall_status) == ("INCOMPLETA", "NO_LEGIBLE")
+    assert result.amounts["OTHER_TAXES_AMOUNT"] is None

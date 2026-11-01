@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { api } from '../api'
 import Icon from '../components/icons'
 import { inputClass } from '../components/styles'
-import { Button, Card, Empty, ErrorBox, Field, Loading, Toggle } from '../components/ui'
+import { Button, Card, Empty, ErrorBox, Field, Loading, PageHeader, Toggle } from '../components/ui'
 import { shortDate } from '../format'
 import { useLoad } from '../hooks'
 
@@ -93,11 +93,17 @@ function ProfileRow({ profile, roles, isSelf, onChanged }) {
     <li className={`px-5 py-4 sm:px-6 ${profile.activo ? '' : 'bg-surface/60'}`}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
         <span
-          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
-            profile.activo ? 'bg-brand-100 text-brand-700' : 'bg-surface text-subtle'
+          aria-hidden="true"
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[12px] font-semibold ${
+            profile.activo ? 'bg-brand-950 text-white' : 'bg-surface-strong text-subtle'
           }`}
         >
-          <Icon name="user" size={17} />
+          {profile.nombre
+            .split(/\s+/)
+            .filter(Boolean)
+            .slice(0, 2)
+            .map((word) => word[0].toUpperCase())
+            .join('') || <Icon name="user" size={17} />}
         </span>
         <span className="min-w-0 flex-1">
           <span className={`block truncate text-sm font-medium ${profile.activo ? 'text-ink' : 'text-muted'}`}>
@@ -143,36 +149,43 @@ export default function Profiles({ user }) {
   const active = profiles.data?.filter((p) => p.activo).length ?? 0
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
-      <div className="lg:sticky lg:top-24 lg:self-start">
-        {roles.data && <NewProfile roles={roles.data} onCreated={profiles.reload} />}
-      </div>
-
-      <Card
+    <div className="space-y-6 lg:space-y-8">
+      <PageHeader
+        eyebrow="Administración"
         title="Perfiles"
-        subtitle={
-          profiles.data
-            ? `${profiles.data.length} en total · ${active} activo${active === 1 ? '' : 's'}. Un perfil desactivado no puede iniciar sesión; sus documentos y correcciones se conservan.`
-            : undefined
-        }
-      >
-        <ErrorBox message={profiles.error || roles.error} />
-        {!profiles.data && profiles.loading && <Loading />}
-        {profiles.data?.length === 0 && <Empty icon="user" title="Aún no hay perfiles" />}
-        {profiles.data?.length > 0 && roles.data && (
-          <ul className="-mx-5 divide-y divide-line sm:-mx-6">
-            {profiles.data.map((profile) => (
-              <ProfileRow
-                key={profile.id}
-                profile={profile}
-                roles={roles.data}
-                isSelf={profile.id === user.id}
-                onChanged={profiles.reload}
-              />
-            ))}
-          </ul>
-        )}
-      </Card>
+        meta="Quién puede entrar a Veriq y con qué rol. Solo los administradores ven esta sección."
+      />
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
+        <div className="lg:sticky lg:top-6 lg:self-start">
+          {roles.data && <NewProfile roles={roles.data} onCreated={profiles.reload} />}
+        </div>
+
+        <Card
+          title="Equipo"
+          subtitle={
+            profiles.data
+              ? `${profiles.data.length} en total · ${active} activo${active === 1 ? '' : 's'}. Un perfil desactivado no puede iniciar sesión; sus documentos y correcciones se conservan.`
+              : undefined
+          }
+        >
+          <ErrorBox message={profiles.error || roles.error} />
+          {!profiles.data && profiles.loading && <Loading />}
+          {profiles.data?.length === 0 && <Empty icon="user" title="Aún no hay perfiles" />}
+          {profiles.data?.length > 0 && roles.data && (
+            <ul className="-mx-5 -mb-5 divide-y divide-line border-t border-line sm:-mx-6 sm:-mb-6">
+              {profiles.data.map((profile) => (
+                <ProfileRow
+                  key={profile.id}
+                  profile={profile}
+                  roles={roles.data}
+                  isSelf={profile.id === user.id}
+                  onChanged={profiles.reload}
+                />
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
     </div>
   )
 }

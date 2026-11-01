@@ -13,6 +13,7 @@ from tests.factories import (
 
 INVOICE = page_response(detected("FACTURA_ELECTRONICA", "FACTURA ELECTRÓNICA", "000123"))
 CONTROL = page_response(detected("CONTROL_INTERNO", "CONTROL INTERNO", "2388"))
+OXXO_RUT = reading("76.084.682-1")  # el RUT obligatorio de un control interno
 LEFT = {"x": 0, "y": 0, "w": 0.5, "h": 1}
 RIGHT = {"x": 0.5, "y": 0, "w": 0.5, "h": 1}
 
@@ -63,12 +64,13 @@ def test_mismatch_goes_to_human_review(client, fake_ai):
     assert doc["campos_dudosos"] == ["total_neto", "iva", "total"]
 
 
-def test_illegible_required_amount_stores_zeros_and_goes_to_review(client, fake_ai):
+def test_illegible_required_amount_stores_zeros_without_review(client, fake_ai):
+    # La mala lectura no basta para ir a revisión: sin el neto, la suma no se puede comprobar
     fake_ai.pages = {1: CONTROL}
-    fake_ai.extractions = [extraction(NET_AMOUNT=reading("2.5??", status="ILEGIBLE", confidence=0.2))]
+    fake_ai.extractions = [extraction(PROVIDER_RUT=OXXO_RUT, NET_AMOUNT=reading("2.5??", status="ILEGIBLE", confidence=0.2))]
     _upload(client, _image())
     (doc,) = _documents(client)
-    assert (doc["observaciones"], doc["requiere_revision"]) == ("NO_LEGIBLE", True)
+    assert (doc["observaciones"], doc["requiere_revision"]) == ("NO_LEGIBLE", False)
     assert (doc["total_neto"], doc["iva"], doc["impuestos"], doc["total"]) == (0, 0, 0, 0)
     # Se leyó algo ("2.5??"), pero no es fiable
     assert (doc["campos_faltantes"], doc["campos_dudosos"]) == ([], ["total_neto"])
@@ -78,6 +80,7 @@ def test_other_taxes_and_exempt_are_stored_together_as_impuestos(client, fake_ai
     fake_ai.pages = {1: CONTROL}
     fake_ai.extractions = [
         extraction(
+            PROVIDER_RUT=OXXO_RUT,
             NET_AMOUNT=reading("$ 2.579"),
             EXEMPT_AMOUNT=reading("$ 100"),
             TOTAL_AMOUNT=reading("$ 3.266"),
@@ -91,19 +94,54 @@ def test_other_taxes_and_exempt_are_stored_together_as_impuestos(client, fake_ai
     )
 
 
-def test_unknown_documents_are_discarded(client, fake_ai):
+def test_unknown_parts_next_to_a_known_document_are_ignored(client, fake_ai):
     fake_ai.pages = {
         1: page_response(
             detected("CONTROL_INTERNO", "CONTROL INTERNO", "2388", region=LEFT),
-            detected("DESCONOCIDO", "BOLETA ELECTRÓNICA", None, index=2, region=RIGHT),
+            detected("DESCONOCIDO", "…ÓNICA", None, index=2, region=RIGHT),  # la hoja tapada de debajo
         )
     }
     job = _upload(client, _image())
     results = job["archivos"][0]["documentos"]
-    assert [(r["tipo"], r["resultado"]) for r in results] == [("CI", "GUARDADO"), ("DESCONOCIDO", "DESCARTADO")]
-    assert "BOLETA" in results[1]["mensaje"]
-    assert len(_documents(client)) == 1
+    assert [(r["tipo"], r["resultado"]) for r in results] == [("CI", "GUARDADO"), ("DESC", "DESCARTADO")]
+    assert [d["tipo"] for d in _documents(client)] == ["CI"]
     assert len(fake_ai.extraction_calls) == 1  # al desconocido no se le extraen datos
+
+
+def test_file_without_known_documents_is_registered_once_as_desc(client, fake_ai):
+    fake_ai.pages = {
+        1: page_response(
+            detected("DESCONOCIDO", "BOLETA ELECTRÓNICA", None, region=LEFT),
+            detected("DESCONOCIDO", None, None, index=2, region=RIGHT),
+        )
+    }
+    job = _upload(client, _image())
+    results = job["archivos"][0]["documentos"]
+    assert [(r["tipo"], r["resultado"]) for r in results] == [("DESC", "GUARDADO"), ("DESC", "DESCARTADO")]
+    assert "BOLETA" in results[0]["mensaje"]
+    unknown = client.get(f"/documentos/{results[0]['id']}").json()
+    assert {k: unknown[k] for k in ("tipo", "rut_proveedor", "folio", "imagen", "observaciones", "requiere_revision", "total")} == {
+        "tipo": "DESC", "rut_proveedor": "1-9", "folio": "0000", "imagen": "DESC_1-9_0000.png",
+        "observaciones": "DESCONOCIDO", "requiere_revision": True, "total": None,
+    }
+    assert fake_ai.extraction_calls == []
+    # Otro archivo desconocido no choca con el primero: su imagen lleva -2
+    second = _upload(client, _image(2))["archivos"][0]["documentos"][0]
+    assert client.get(f"/documentos/{second['id']}").json()["imagen"] == "DESC_1-9_0000-2.png"
+    assert [d["tipo"] for d in _documents(client, tipo="DESC")] == ["DESC", "DESC"]
+
+
+def test_internal_control_always_gets_the_oxxo_rut(client, fake_ai):
+    fake_ai.pages = {1: CONTROL}
+    # El segundo lee 76.123.456-0 (y otro folio, para no ser un duplicado del primero)
+    fake_ai.extractions = [extraction(PROVIDER_RUT=OXXO_RUT), extraction(DOCUMENT_NUMBER=reading("N° 2389"))]
+    first = _upload(client, _image(1))["archivos"][0]["documentos"][0]
+    fake_ai.pages = {1: page_response(detected("CONTROL_INTERNO", "CONTROL INTERNO", "2389"))}
+    second = _upload(client, _image(2))["archivos"][0]["documentos"][0]
+    ok, other = (client.get(f"/documentos/{r['id']}").json() for r in (first, second))
+    assert (ok["rut_proveedor"], ok["observaciones"], ok["requiere_revision"]) == ("76084682-1", "LEGIBLE", False)
+    # Aunque se lea otro RUT, el de un control interno es fijo
+    assert (other["rut_proveedor"], other["observaciones"], other["requiere_revision"]) == ("76084682-1", "LEGIBLE", False)
 
 
 def test_multipage_pdf_with_several_documents(client, fake_ai):
@@ -158,7 +196,9 @@ def test_second_reading_disagreement_makes_the_document_not_legible(client, fake
 
 def test_unvalued_dispatch_guide_is_legible_without_amounts(client, fake_ai):
     fake_ai.pages = {1: page_response(detected("GUIA_DESPACHO", "GUÍA DE DESPACHO ELECTRÓNICA", "55"))}
-    fake_ai.extractions = [extraction(NET_AMOUNT=ABSENT, VAT_AMOUNT=ABSENT, TOTAL_AMOUNT=ABSENT)]
+    fake_ai.extractions = [
+        extraction(PROVIDER_RUT=reading("76.084.682-1"), NET_AMOUNT=ABSENT, VAT_AMOUNT=ABSENT, TOTAL_AMOUNT=ABSENT)
+    ]
     _upload(client, _image())
     (doc,) = _documents(client)
     assert (doc["observaciones"], doc["total_neto"], doc["iva"], doc["impuestos"], doc["total"]) == (
@@ -206,18 +246,19 @@ def test_filters_and_summary(client, fake_ai):
         extraction(DOCUMENT_NUMBER=reading("N° 3"), ISSUE_DATE=reading("?", status="ILEGIBLE")),
     ]
     _upload(client, _image(1), _image(2), _image(3))
-    assert {d["folio"] for d in _documents(client, requiere_revision=True)} == {"2", "3"}
+    # La fecha ilegible (folio 3) no va a revisión; el descuadre (folio 2), siempre
+    assert {d["folio"] for d in _documents(client, requiere_revision=True)} == {"2"}
     assert [d["folio"] for d in _documents(client, observaciones="DESCUADRE")] == ["2"]
     assert [d["folio"] for d in _documents(client, q="0001")] == ["000123"]
     assert _documents(client, tipo="CI") == []
     summary = client.get("/documentos/resumen").json()
     assert summary == {
         "total": 3,
-        "requieren_revision": 2,
+        "requieren_revision": 1,
         "por_observaciones": {"LEGIBLE": 1, "DESCUADRE": 1, "NO_LEGIBLE": 1},
         "por_tipo": {"FC": 3},
     }
-    assert [t["documento"] for t in client.get("/tipos-documentos").json()] == ["FC", "CI", "GD"]
+    assert [t["documento"] for t in client.get("/tipos-documentos").json()] == ["FC", "CI", "GD", "DESC"]
     assert client.get("/documentos/999").status_code == 404
 
 
@@ -303,3 +344,14 @@ def test_a_folder_accepts_more_files_than_a_loose_upload(client, fake_ai, monkey
     too_many = client.post("/trabajos", files=[*three, ("files", _image(4))], data={"carpeta": "Enorme"})
     assert too_many.status_code == 422 and "500" not in too_many.json()["detail"]
     assert [f["nombre"] for f in client.get("/carpetas").json()] == ["Grande"]
+
+
+def test_document_with_deduced_type_is_read_and_goes_to_review(client, fake_ai):
+    fake_ai.pages = {1: page_response(detected("FACTURA_ELECTRONICA", "Ing.Facturas Manuales", basis="CONTEXTO"))}
+    job = _upload(client, _image())
+    (result,) = job["archivos"][0]["documentos"]
+    assert (result["tipo"], result["resultado"]) == ("FC", "GUARDADO")
+    assert "Ing.Facturas Manuales" in result["mensaje"]
+    doc = client.get(f"/documentos/{result['id']}").json()
+    # Los montos cuadran, pero el tipo lo confirma una persona
+    assert (doc["observaciones"], doc["requiere_revision"], doc["total"]) == ("NO_LEGIBLE", True, 119000)

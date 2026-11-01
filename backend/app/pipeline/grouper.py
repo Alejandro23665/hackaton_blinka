@@ -8,7 +8,7 @@
 """
 from dataclasses import dataclass, field
 
-from app.pipeline.segmenter import PageAnalysis, clean_region, normalize_number, verify_type
+from app.pipeline.segmenter import TYPE_INFERRED, PageAnalysis, clean_region, normalize_number, verify_type
 
 
 @dataclass
@@ -27,6 +27,11 @@ class GroupedDocument:
     number_seen: str | None
     regions: list[GroupedRegion] = field(default_factory=list)
     issues: list[dict] = field(default_factory=list)
+
+    @property
+    def type_inferred(self) -> bool:
+        """El tipo se dedujo sin ver el título completo: el documento va a revisión humana."""
+        return any(issue["code"] == TYPE_INFERRED for issue in self.issues)
 
 
 def _continues(document: GroupedDocument | None, doc_type: str, number: str | None) -> bool:
@@ -58,7 +63,7 @@ def group_pages(pages: list[tuple[int, PageAnalysis]]) -> list[GroupedDocument]:
                 last_on_page = last
                 continue
 
-            doc_type, issues = verify_type(doc.doc_type, doc.evidence, doc.confidence)
+            doc_type, issues = verify_type(doc.doc_type, doc.evidence, doc.confidence, doc.type_basis)
             if doc.continuation_of_previous:
                 issues.append(
                     {

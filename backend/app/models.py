@@ -40,7 +40,20 @@ class TipoDocumento(SQLModel, table=True):
     __tablename__ = "tipos_documentos"
 
     id: int | None = Field(default=None, primary_key=True)
-    documento: str  # FC, CI o GD
+    documento: str  # FC, CI, GD o DESC (desconocido)
+
+
+class Cita(SQLModel, table=True):
+    """Una solicitud de cita hecha desde la página pública (db/014). Solo la ve un administrador."""
+
+    __tablename__ = "citas"
+
+    id: int | None = Field(default=None, primary_key=True)
+    email: str
+    pais: str  # código ISO del país (CL); desambigua los prefijos compartidos
+    prefijo: str  # +56
+    telefono: str  # solo dígitos, sin el prefijo
+    creado_en: datetime | None = Field(default=None, sa_column_kwargs={"server_default": "now()"})
 
 
 class Carpeta(SQLModel, table=True):
@@ -66,7 +79,7 @@ class DocumentoProcesado(SQLModel, table=True):
     total_neto: int | None = None
     iva: int | None = None
     total: int | None = None
-    observaciones: str  # LEGIBLE, NO_LEGIBLE o DESCUADRE
+    observaciones: str  # LEGIBLE, NO_LEGIBLE, DESCUADRE o DESCONOCIDO (tipo DESC, db/011)
     id_tipo_documento: int = Field(foreign_key="tipos_documentos.id")
     imagen: str  # nombre del archivo del documento: TIPO_RUT_FOLIO.ext (en documentos/ del almacenamiento)
     # El "Modelo IA" si lo procesó la IA; la persona que lo corrigió, si alguien intervino
@@ -77,12 +90,15 @@ class DocumentoProcesado(SQLModel, table=True):
     revisado_en: datetime | None = None  # cuándo lo revisó una persona
     id_carpeta: int | None = Field(default=None, foreign_key="carpetas.id")  # vacío si se subió suelto
     creado_en: datetime | None = Field(default=None, sa_column_kwargs={"server_default": "now()"})
+    # El procesamiento lo manda a revisión humana (db/012). Un NO_LEGIBLE puede no estar escalado: por
+    # ejemplo, si solo falta la fecha o el folio
+    escalado: bool = Field(default=False, sa_column_kwargs={"server_default": "false"})
+    # Guías: denominación impresa (GUIA_DESPACHO o GUIA_ELECTRONICA), que decide su RUT fijo (db/013)
+    denominacion: str | None = None
     # La calcula la base: nunca se escribe desde aquí
     requiere_revision: bool | None = Field(
         default=None,
-        sa_column=Column(
-            Boolean, Computed("observaciones <> 'LEGIBLE' AND revisado_en IS NULL", persisted=True)
-        ),
+        sa_column=Column(Boolean, Computed("escalado AND revisado_en IS NULL", persisted=True)),
     )
 
 

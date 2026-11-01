@@ -201,6 +201,8 @@ class NormalizedField:
     invalid_reason: str | None = None
     # Impuestos con alguna línea ilegible: la suma de las líneas que sí se leyeron (para deducir)
     partial: Decimal | None = None
+    # Leído con confianza entre FIELD_DISCARD_CONFIDENCE y FIELD_MIN_CONFIDENCE: se guarda, pero va a revisión
+    low_confidence: bool = False
 
 
 @dataclass
@@ -219,8 +221,13 @@ def normalize_field(
     region_index: int | None,
     min_confidence: float | None = None,
 ) -> NormalizedField:
-    """Un campo leído por la IA, convertido a su valor. `min_confidence`: por defecto FIELD_MIN_CONFIDENCE."""
-    min_confidence = settings.FIELD_MIN_CONFIDENCE if min_confidence is None else min_confidence
+    """Un campo leído por la IA, convertido a su valor.
+
+    Con confianza menor que `min_confidence` (por defecto FIELD_DISCARD_CONFIDENCE) el valor se descarta:
+    queda ILEGIBLE. Si se acepta con confianza menor que FIELD_MIN_CONFIDENCE, queda marcado como
+    confianza baja (el documento va a revisión humana).
+    """
+    min_confidence = settings.FIELD_DISCARD_CONFIDENCE if min_confidence is None else min_confidence
     raw = raw_text.strip() if raw_text and raw_text.strip() else None
     item = NormalizedField(name, status, None, raw, confidence, region_index)
     if status == "AUSENTE":
@@ -241,12 +248,15 @@ def normalize_field(
         item.status, item.invalid_reason = "ILEGIBLE", parsed.reason
         return item
     item.value = parsed.value
+    item.low_confidence = confidence is not None and confidence < settings.FIELD_MIN_CONFIDENCE
     return item
 
 
 def _is_vat(label: str) -> bool:
-    """'IVA 19%', 'I.V.A.' o 'Iva' son IVA; 'IABA 10%' o 'ILA VIN 20.5%' no."""
-    return "IVA" in re.findall(r"[A-Z]+", _plain(label).replace(".", ""))
+    """'IVA 19%', 'I.V.A.' o 'Iva' son IVA; 'IABA 10%', 'ILA VIN 20.5%' o una retención ('Ret. IVA',
+    'Retención IVA') no: la retención es un impuesto adicional."""
+    words = re.findall(r"[A-Z]+", _plain(label).replace(".", ""))
+    return "IVA" in words and not any(word.startswith("RET") for word in words)
 
 
 def split_tax_lines(lines: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -285,6 +295,7 @@ def normalize_tax_lines(name: str, lines: list[dict], min_confidence: float | No
         result.partial = sum((item.value for _, item in parsed if item.status == "LEIDO"), Decimal(0))
         return result
     result.value = sum((item.value for _, item in parsed), Decimal(0))
+    result.low_confidence = any(item.low_confidence for _, item in parsed)
     return result
 
 
@@ -325,19 +336,18 @@ def normalize_extraction(fields: dict[str, dict], check: dict[str, dict] | None 
     """`fields`: por campo, {status, raw_text, confidence, region_index} como los devuelve el extractor.
 
     `check`: una segunda lectura independiente (misma forma). Si se da, los campos en los que las
-    dos lecturas no coinciden quedan ILEGIBLE con la alerta LECTURA_INCONSISTENTE, y los que
-    coinciden se aceptan desde AGREEMENT_MIN_CONFIDENCE (sin ella, se exige FIELD_MIN_CONFIDENCE).
+    dos lecturas no coinciden quedan ILEGIBLE con la alerta LECTURA_INCONSISTENTE. Los que coinciden
+    quedan con confianza baja si cualquiera de las dos lecturas la tuvo.
     VAT_AMOUNT y OTHER_TAXES_AMOUNT vienen como {"lines": [...]} (líneas de impuesto): se suman con
     normalize_tax_lines.
     """
     result: dict[str, NormalizedField] = {}
     issues: list[dict] = []
     for name in PARSERS:
-        threshold = settings.AGREEMENT_MIN_CONFIDENCE if check is not None else None
-        item = _from_reading(name, fields, threshold)
+        item = _from_reading(name, fields)
         result[name] = item
         if check is not None:
-            second = _from_reading(name, check, threshold)
+            second = _from_reading(name, check)
             # La suma parcial solo vale si la segunda lectura no la contradice
             if item.partial is not None and second.status == "LEIDO" and second.value != item.partial:
                 item.partial = None
@@ -358,6 +368,18 @@ def normalize_extraction(fields: dict[str, dict], check: dict[str, dict] | None 
                     }
                 )
                 continue
+            item.low_confidence = item.low_confidence or (item.status == "LEIDO" and second.low_confidence)
+        if item.low_confidence:
+            issues.append(
+                {
+                    "code": "CONFIANZA_BAJA",
+                    "severity": "ADVERTENCIA",
+                    "field_name": name,
+                    "message": f"{FIELD_LABELS[name]} leído con confianza baja (menos de "
+                    f"{settings.FIELD_MIN_CONFIDENCE:.0%}): una persona debe confirmarlo.",
+                    "details": {"raw_text": item.raw_text, "confidence": item.confidence},
+                }
+            )
         if item.status == "ILEGIBLE" and name != "PROVIDER_RUT":
             issues.append(
                 {

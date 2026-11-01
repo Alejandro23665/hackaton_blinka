@@ -3,8 +3,9 @@ import { api } from '../api'
 import DocumentViewer from '../components/DocumentViewer'
 import Icon from '../components/icons'
 import { inputClass } from '../components/styles'
-import { Button, Card, ErrorBox, Loading, StatusBadge, Toggle } from '../components/ui'
-import { DOC_TYPES, FIELD_LABELS, REVIEW_REASONS, clp, dateTime, rut } from '../format'
+import { TypeCode } from '../components/DocumentTable'
+import { Button, Card, ErrorBox, Loading, Notice, PageHeader, ReviewFlag, StatusBadge, Toggle } from '../components/ui'
+import { DOC_TYPES, FIELD_LABELS, FREQUENT_RUTS, clp, dateTime, reviewReason, rut } from '../format'
 import { href, useLoad } from '../hooks'
 
 const AMOUNTS = ['total_neto', 'iva', 'impuestos', 'total']
@@ -34,14 +35,25 @@ function initialValues(doc) {
 function Problem({ kind }) {
   if (!kind) return null
   return kind === 'falta' ? (
-    <span className="text-xs font-medium text-danger-700">Falta: no se pudo leer</span>
+    <span className="inline-flex items-center gap-1 text-xs font-medium text-danger-700">
+      <Icon name="alert" size={12} strokeWidth={2.2} />
+      Falta: no se pudo leer
+    </span>
   ) : (
-    <span className="text-xs font-medium text-warning-700">Con dudas: revísalo</span>
+    <span className="inline-flex items-center gap-1 text-xs font-medium text-warning-700">
+      <Icon name="eyeOff" size={12} strokeWidth={2.2} />
+      Con dudas: revísalo
+    </span>
   )
 }
 
 function FormField({ name, problem, children }) {
-  const ring = problem === 'falta' ? 'rounded-control ring-2 ring-danger-600/40' : problem === 'duda' ? 'rounded-control ring-2 ring-warning-600/40' : ''
+  const ring =
+    problem === 'falta'
+      ? 'rounded-control ring-[3px] ring-danger-600/25 [&_input]:border-danger-600/60'
+      : problem === 'duda'
+        ? 'rounded-control ring-[3px] ring-warning-600/25 [&_input]:border-warning-600/60'
+        : ''
   return (
     <label className="block">
       <span className="mb-1.5 flex items-center justify-between gap-2">
@@ -53,8 +65,38 @@ function FormField({ name, problem, children }) {
   )
 }
 
+/** Botones con los RUT más habituales del tipo: un clic los escribe en el campo. */
+function FrequentRuts({ tipo, value, onPick }) {
+  const options = FREQUENT_RUTS[tipo] ?? []
+  if (!options.length) return null
+  const current = value.replace(/[.\s]/g, '').toUpperCase()
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      <span className="text-[11px] text-subtle">Habituales:</span>
+      {options.map((option) => (
+        <button
+          key={option}
+          type="button"
+          onClick={() => onPick(rut(option))}
+          aria-pressed={current === option}
+          className={`h-7 rounded-md border px-2 text-xs tabular transition-colors ${
+            current === option
+              ? 'border-brand-600 bg-brand-50 font-medium text-brand-700'
+              : 'border-line bg-canvas text-muted hover:border-brand-300 hover:bg-brand-25 hover:text-brand-700'
+          }`}
+        >
+          {rut(option)}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function Form({ doc, onSaved }) {
-  const [values, setValues] = useState(() => initialValues(doc))
+  const [initial] = useState(() => initialValues(doc))
+  const [values, setValues] = useState(initial)
+  // Sin cambios se acepta tal como está; con cambios se guardan
+  const changed = JSON.stringify(values) !== JSON.stringify(initial)
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -73,18 +115,29 @@ function Form({ doc, onSaved }) {
   const difference = computable ? amounts.total - calculated : null
   const mismatch = difference != null && difference !== 0
 
+  async function accept() {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.documents.accept(doc.id)
+      onSaved()
+    } catch (err) {
+      setError(err.message)
+      setBusy(false)
+    }
+  }
+
   async function save(e) {
     e.preventDefault()
-    if (!values.rut_proveedor.trim() || !values.folio.trim() || !values.fecha) {
-      setError('Completa el RUT, el folio y la fecha.')
+    if (!changed) return
+    // Ningún dato es obligatorio: lo que no se puede leer va vacío y se guarda como No legible.
+    // Lo que sí se escribe debe ser válido.
+    if (values.tipo === 'DESC') {
+      setError('Elige el tipo del documento.')
       return
     }
     if (invalid.length) {
       setError(`Montos no válidos: ${invalid.map((n) => FIELD_LABELS[n]).join(', ')}. Usa solo números.`)
-      return
-    }
-    if (!unvalued && !computable) {
-      setError('Completa el neto, el IVA y el total (una guía sin valorizar puede ir sin montos).')
       return
     }
     if (mismatch && !confirm) {
@@ -94,7 +147,14 @@ function Form({ doc, onSaved }) {
     setBusy(true)
     setError(null)
     try {
-      await api.documents.correct(doc.id, { ...values, ...amounts, confirmar_descuadre: mismatch && confirm })
+      await api.documents.correct(doc.id, {
+        ...values,
+        ...amounts,
+        rut_proveedor: values.rut_proveedor.trim() || null,
+        folio: values.folio.trim() || null,
+        fecha: values.fecha || null,
+        confirmar_descuadre: mismatch && confirm,
+      })
       onSaved()
     } catch (err) {
       setError(err.message)
@@ -104,11 +164,19 @@ function Form({ doc, onSaved }) {
 
   return (
     <form onSubmit={save} noValidate className="space-y-6">
-      <Card title="Datos del documento" subtitle="Corrige lo marcado y confirma el resto">
+      <Card
+        title="Datos del documento"
+        subtitle="Corrige lo que puedas leer. Lo que no se vea en el documento, déjalo vacío: se guarda como No legible."
+      >
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="block">
             <span className="mb-1.5 block text-[13px] font-medium text-ink">Tipo</span>
             <select value={values.tipo} onChange={set('tipo')} className={inputClass}>
+              {doc.tipo === 'DESC' && (
+                <option value="DESC" disabled>
+                  {DOC_TYPES.DESC} (DESC)
+                </option>
+              )}
               {['FC', 'CI', 'GD'].map((code) => (
                 <option key={code} value={code}>
                   {DOC_TYPES[code]} ({code})
@@ -119,9 +187,19 @@ function Form({ doc, onSaved }) {
           <FormField name="folio" problem={problem('folio')}>
             <input value={values.folio} onChange={set('folio')} className={inputClass} />
           </FormField>
-          <FormField name="rut_proveedor" problem={problem('rut_proveedor')}>
-            <input value={values.rut_proveedor} onChange={set('rut_proveedor')} placeholder="76.084.682-1" className={inputClass} />
-          </FormField>
+          <div>
+            <FormField name="rut_proveedor" problem={problem('rut_proveedor')}>
+              <input value={values.rut_proveedor} onChange={set('rut_proveedor')} placeholder="76.084.682-1" className={inputClass} />
+            </FormField>
+            <FrequentRuts
+              tipo={values.tipo}
+              value={values.rut_proveedor}
+              onPick={(value) => {
+                setValues((v) => ({ ...v, rut_proveedor: value }))
+                setError(null)
+              }}
+            />
+          </div>
           <FormField name="fecha" problem={problem('fecha')}>
             <input type="date" value={values.fecha} onChange={set('fecha')} className={inputClass} />
           </FormField>
@@ -152,14 +230,22 @@ function Form({ doc, onSaved }) {
             </FormField>
           ))}
         </div>
-        <dl className="mt-5 space-y-2 border-t border-line pt-4 text-sm">
-          <div className="flex justify-between">
+        <dl className="mt-5 space-y-2 border-t border-dashed border-line-strong pt-4 text-sm">
+          <div className="flex items-center justify-between gap-3">
             <dt className="text-muted">Calculado</dt>
-            <dd className="tabular font-medium">{unvalued ? 'sin montos' : clp(calculated)}</dd>
+            <dd className="flex items-center gap-2 font-medium tabular">
+              {computable && !mismatch && (
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-success-700">
+                  <Icon name="check" size={13} strokeWidth={2.2} />
+                  cuadra con el total
+                </span>
+              )}
+              {unvalued ? 'sin montos' : clp(calculated)}
+            </dd>
           </div>
           {mismatch && (
             <>
-              <div className="flex justify-between rounded-control bg-danger-50 px-3 py-2 text-danger-700">
+              <div className="flex justify-between rounded-control bg-danger-50 px-3 py-2 text-danger-700 ring-1 ring-danger-600/20 ring-inset">
                 <dt className="font-medium">Diferencia con el total</dt>
                 <dd className="tabular font-semibold">{clp(difference)}</dd>
               </div>
@@ -180,11 +266,26 @@ function Form({ doc, onSaved }) {
         </dl>
       </Card>
 
-      <ErrorBox message={error} />
-      <div className="flex justify-end">
-        <Button type="submit" icon="check" disabled={busy}>
-          {busy ? 'Guardando…' : 'Guardar revisión'}
-        </Button>
+      {/* Acciones siempre a mano: la barra queda fija abajo mientras se recorre el formulario */}
+      <div className="sticky bottom-[calc(66px+env(safe-area-inset-bottom))] z-10 space-y-3 rounded-card border border-line bg-canvas/95 p-4 shadow-pop backdrop-blur-md lg:bottom-4">
+        <ErrorBox message={error} />
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <p className="mr-auto flex min-w-[12rem] flex-1 items-start gap-2 text-xs leading-relaxed text-muted">
+            <span
+              aria-hidden="true"
+              className={`mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full ${changed ? 'bg-brand-600' : 'bg-line-strong'}`}
+            />
+            {changed
+              ? 'Hay cambios sin guardar. Guárdalos para corregir el documento.'
+              : 'Si no se puede leer mejor, acéptalo tal como está: queda revisado a tu nombre.'}
+          </p>
+          <Button type="button" variant="secondary" icon="check" disabled={changed || busy} onClick={accept}>
+            Aceptar
+          </Button>
+          <Button type="submit" icon="pencil" disabled={!changed || busy}>
+            {busy ? 'Guardando…' : 'Guardar cambios'}
+          </Button>
+        </div>
       </div>
     </form>
   )
@@ -206,35 +307,39 @@ export default function Correct({ id }) {
 
   return (
     <div className="space-y-6">
-      <div>
-        <a href={href('revision')} className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-brand-700">
-          <Icon name="arrowLeft" size={14} /> Revisión
-        </a>
-        <h2 className="mt-1 flex flex-wrap items-center gap-3 text-xl font-semibold tracking-tight">
-          {DOC_TYPES[d.tipo]}
-          {d.folio && <span className="tabular text-muted">N° {d.folio}</span>}
-          <StatusBadge status={d.observaciones} />
-        </h2>
-        <p className="mt-1 text-xs text-subtle">
-          Subido el {dateTime(d.creado_en)} · id {d.id}
-        </p>
-      </div>
+      <PageHeader
+        back={{ href: href('revision'), label: 'Revisión' }}
+        title={
+          <>
+            <TypeCode tipo={d.tipo} />
+            {DOC_TYPES[d.tipo]}
+            {d.folio && <span className="font-normal text-muted tabular">N° {d.folio}</span>}
+          </>
+        }
+        meta={
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+            <StatusBadge status={d.observaciones} />
+            {d.requiere_revision && <ReviewFlag />}
+            <span className="text-xs text-subtle">
+              Subido el {dateTime(d.creado_en)} · id {d.id}
+            </span>
+          </span>
+        }
+      />
 
       {d.requiere_revision ? (
-        <p className="flex items-start gap-2 rounded-control bg-warning-50 px-4 py-3 text-sm text-warning-700">
-          <Icon name="alert" size={18} className="mt-px" />
-          {REVIEW_REASONS[d.observaciones]}
-        </p>
+        <Notice tone="brand" title="Por qué está en revisión:">
+          {reviewReason(d)}
+        </Notice>
       ) : (
-        <p className="flex items-start gap-2 rounded-control bg-success-50 px-4 py-3 text-sm text-success-700">
-          <Icon name="check" size={18} className="mt-px" />
+        <Notice tone="success">
           {d.revisado_en ? `Revisado por ${d.usuario} el ${dateTime(d.revisado_en)}.` : 'No requiere revisión.'} Puedes
           volver a corregirlo si hace falta.
-        </p>
+        </Notice>
       )}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,6fr)_minmax(0,5fr)]">
-        <div className="lg:sticky lg:top-24 lg:self-start">
+        <div className="lg:sticky lg:top-6 lg:self-start">
           <DocumentViewer id={d.id} />
         </div>
         <Form key={d.id} doc={d} onSaved={next} />

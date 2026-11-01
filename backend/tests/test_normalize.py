@@ -122,7 +122,7 @@ def test_absent_is_not_zero_and_illegible_keeps_original_text():
 def test_low_confidence_or_unparseable_reading_becomes_illegible():
     result = normalize_extraction(
         fields(
-            NET_AMOUNT=reading("$ 100.000", confidence=settings.FIELD_MIN_CONFIDENCE - 0.05),
+            NET_AMOUNT=reading("$ 100.000", confidence=settings.FIELD_DISCARD_CONFIDENCE - 0.05),
             TOTAL_AMOUNT=reading("ciento diecinueve mil"),
         )
     )
@@ -239,17 +239,23 @@ def test_no_tax_lines_means_both_absent():
     assert result.fields["VAT_AMOUNT"].status == result.fields["OTHER_TAXES_AMOUNT"].status == "AUSENTE"
 
 
-def test_two_matching_readings_accept_lower_confidence():
-    # Las dos lecturas ven "$ 830" con 70 % de seguridad: coinciden, así que se acepta
+def test_confidence_between_60_and_80_is_kept_but_flagged():
+    # Las dos lecturas ven "$ 100.000" con 70 % de seguridad: se guarda, marcado como confianza baja
     low = reading("$ 100.000", confidence=0.7)
     result = normalize_extraction(fields(NET_AMOUNT=low), fields(NET_AMOUNT=low))
-    assert (result.fields["NET_AMOUNT"].status, result.fields["NET_AMOUNT"].value) == ("LEIDO", 100000)
+    item = result.fields["NET_AMOUNT"]
+    assert (item.status, item.value, item.low_confidence) == ("LEIDO", 100000, True)
+    assert any(i["code"] == "CONFIANZA_BAJA" for i in result.issues)
+    # Basta con que una de las dos lecturas tenga confianza baja
+    sure = reading("$ 100.000", confidence=0.95)
+    assert normalize_extraction(fields(NET_AMOUNT=sure), fields(NET_AMOUNT=low)).fields["NET_AMOUNT"].low_confidence
+    assert not normalize_extraction(fields(NET_AMOUNT=sure), fields(NET_AMOUNT=sure)).fields["NET_AMOUNT"].low_confidence
     # Si no coinciden, sigue siendo ilegible
     other = reading("$ 106.000", confidence=0.7)
     result = normalize_extraction(fields(NET_AMOUNT=low), fields(NET_AMOUNT=other))
     assert result.fields["NET_AMOUNT"].status == "ILEGIBLE"
-    # Por debajo del mínimo de coincidencia, tampoco
-    very_low = reading("$ 100.000", confidence=settings.AGREEMENT_MIN_CONFIDENCE - 0.1)
+    # Por debajo del 60 % se descarta, aunque coincidan
+    very_low = reading("$ 100.000", confidence=settings.FIELD_DISCARD_CONFIDENCE - 0.05)
     result = normalize_extraction(fields(NET_AMOUNT=very_low), fields(NET_AMOUNT=very_low))
     assert result.fields["NET_AMOUNT"].status == "ILEGIBLE"
 

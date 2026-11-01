@@ -27,7 +27,8 @@ from app.ai import client
 from app.ai.client import AIError
 from app.core.config import settings
 from app.models import MODEL_ROLE, DocumentoProcesado, LlamadaIA, Rol, TipoDocumento, Usuario
-from app.pipeline import extractor, images, segmenter
+from app.pipeline import extractor, images, ruts, segmenter
+from app.pipeline.fields import SUBSTITUTE_RUT
 from app.pipeline.grouper import GroupedDocument, group_pages
 from app.pipeline.normalize import Normalized, is_other_date_label, normalize_extraction, split_tax_lines
 from app.pipeline.preprocess import PreprocessError, RenderedPage, render_pages
@@ -36,6 +37,9 @@ from app.storage import document_key, get_storage
 
 # Tipo que detecta la IA → código de tipos_documentos
 TYPE_CODES = {"FACTURA_ELECTRONICA": "FC", "CONTROL_INTERNO": "CI", "GUIA_DESPACHO": "GD"}
+# Documento que no es FC, CI ni GD (db/011): se registra sin leer sus datos, con imagen DESC_1-9_0000
+UNKNOWN_CODE = "DESC"
+UNKNOWN_FOLIO = "0000"
 # Estado del validador → observaciones
 OBSERVATIONS = {"PROCESADO": "LEGIBLE", "NO_LEGIBLE": "NO_LEGIBLE", "DESCUADRE": "DESCUADRE"}
 # Campo del extractor → columna de documentos_procesados (otros impuestos y exento van juntos)
@@ -68,13 +72,16 @@ class Reading:
     validation: Validation
     signed: bool
     signature_doubtful: bool = False  # una lectura vio la firma y la otra no
+    type_inferred: bool = False  # tipo deducido sin ver el título completo: lo confirma una persona
+    denomination: str | None = None  # guías: GUIA_DESPACHO o GUIA_ELECTRONICA, según el título
+    amounts_covered: bool = False  # la hoja adjunta tapa un dato clave: no se registra ningún importe
 
 
 @dataclass
 class DocumentResult:
     """Qué pasó con cada documento encontrado en el archivo (para mostrar el avance)."""
 
-    tipo: str  # FC, CI, GD o DESCONOCIDO
+    tipo: str  # FC, CI, GD o DESC
     resultado: str  # GUARDADO, DESCARTADO, DUPLICADO o ERROR
     id: int | None = None
     folio: str | None = None
@@ -111,10 +118,65 @@ def _readings(extraction: extractor.Extraction) -> dict[str, dict]:
     return readings
 
 
-def build_reading(doc_type: str, first: extractor.Extraction, second: extractor.Extraction | None) -> Reading:
+def _resolve_rut(
+    doc_type: str, title: str | None, normalized: Normalized, extractions: list[extractor.Extraction]
+) -> None:
+    """Fija el RUT del emisor: el fijo del tipo de documento, el leído o el del catálogo de RUT
+    conocidos de las facturas (app/pipeline/ruts.py)."""
+    field = normalized.fields["PROVIDER_RUT"]
+    raws = [e.fields["PROVIDER_RUT"].raw_text for e in extractions if "PROVIDER_RUT" in e.fields]
+    resolution = ruts.resolve(doc_type, title, field, raws, [e.catalog_rut for e in extractions])
+    if resolution.completed:
+        normalized.issues = [i for i in normalized.issues if i["code"] != "RUT_SUSTITUTO"]
+        normalized.issues.append(
+            {
+                "code": "RUT_COMPLETADO",
+                "severity": "INFO",
+                "field_name": "PROVIDER_RUT",
+                "message": f"RUT del prestador completado como {resolution.value}: {resolution.completed}.",
+                "details": {"raw_text": field.raw_text},
+            }
+        )
+        field.status, field.value, field.invalid_reason = "LEIDO", resolution.value, None
+    if resolution.value is not None and resolution.value == ruts.expected_rut(doc_type, title):
+        field.low_confidence = False  # el tipo de documento ya dice cuál es: no hay nada que confirmar
+    normalized.provider_rut = resolution.value or SUBSTITUTE_RUT
+    normalized.rut_is_substitute = resolution.value is None
+
+
+AMOUNT_NAMES = ("NET_AMOUNT", "VAT_AMOUNT", "OTHER_TAXES_AMOUNT", "EXEMPT_AMOUNT", "TOTAL_AMOUNT")
+
+
+def _cover_amounts(normalized: Normalized) -> None:
+    """La hoja adjunta tapa un dato clave: ningún importe del documento se registra (podría ser de la hoja)."""
+    for name in AMOUNT_NAMES:
+        item = normalized.fields[name]
+        item.status, item.value, item.partial = "ILEGIBLE", None, None
+        item.low_confidence, item.invalid_reason = False, "la hoja adjunta tapa un dato clave del documento"
+    normalized.issues.append(
+        {
+            "code": "IMPORTES_TAPADOS",
+            "severity": "ADVERTENCIA",
+            "field_name": None,
+            "message": "La hoja adjunta tapa un dato clave: no se registró ningún importe del documento.",
+            "details": None,
+        }
+    )
+
+
+def build_reading(
+    doc_type: str, first: extractor.Extraction, second: extractor.Extraction | None, title: str | None = None
+) -> Reading:
     """Normaliza y valida las dos lecturas independientes de un documento (la segunda falta si
-    EXTRACTION_VERIFY está apagado)."""
+    EXTRACTION_VERIFY está apagado). `title`: el título visto al clasificar (distingue Guía de Despacho
+    de Guía Electrónica)."""
     normalized = normalize_extraction(_readings(first), _readings(second) if second else None)
+    extractions = [e for e in (first, second) if e is not None]
+    _resolve_rut(doc_type, title, normalized, extractions)
+    # Como con los demás datos dudosos, las dos lecturas independientes deben coincidir
+    covered = all(e.attached_sheet_covers_data for e in extractions)
+    if covered:
+        _cover_amounts(normalized)
     values = {name: item.value for name, item in normalized.fields.items()}
     if normalized.rut_is_substitute:
         values["PROVIDER_RUT"] = None
@@ -123,12 +185,32 @@ def build_reading(doc_type: str, first: extractor.Extraction, second: extractor.
         {name: item.status for name, item in normalized.fields.items()},
         values,
         Decimal(settings.TOTAL_TOLERANCE_CLP),
-        partial={name: item.partial for name, item in normalized.fields.items() if item.partial is not None},
     )
     # Firmado solo si las dos lecturas ven la firma: dar por recibido algo sin firma es peor
     signed = first.signature.present and (second is None or second.signature.present)
     doubtful = second is not None and first.signature.present != second.signature.present
-    return Reading(doc_type, normalized, validation, signed, doubtful)
+    denomination = ruts.guide_denomination(title) if doc_type == "GUIA_DESPACHO" else None
+    return Reading(doc_type, normalized, validation, signed, doubtful, denomination=denomination, amounts_covered=covered)
+
+
+def escalation_reasons(reading: Reading) -> list[str]:
+    """Por qué el documento va a revisión humana (vacío: no va). La revisión es selectiva: la mala
+    calidad de la imagen no basta. Un campo ilegible (RUT, folio, fecha, montos, un impuesto adicional) o
+    una suma que no se puede comprobar dejan el documento NO_LEGIBLE, fuera de la cola.
+
+    - Descuadre confirmado: todos los montos necesarios se leyeron y no suman el total.
+    - Tipo deducido sin ver el título: duda que afecta a la clasificación.
+    (Los documentos desconocidos también van a revisión: ver save_unknown.)
+    """
+    reasons = []
+    amounts = reading.validation.amounts.values()
+    # Un monto con decimales es una mala lectura (en pesos no hay decimales), no un descuadre confirmado
+    misread = any(v is not None and v != v.to_integral_value() for v in amounts)
+    if reading.validation.validation_status == "DESCUADRE" and not misread:
+        reasons.append("descuadre")
+    if reading.type_inferred:
+        reasons.append("tipo deducido sin ver el título")
+    return reasons
 
 
 def field_problems(reading: Reading) -> tuple[list[str], list[str]]:
@@ -136,16 +218,15 @@ def field_problems(reading: Reading) -> tuple[list[str], list[str]]:
 
     - Falta: un obligatorio ausente, o ilegible sin ningún texto leído.
     - Duda: ilegible con texto (confianza baja, las dos lecturas no coinciden, formato raro), los
-      montos de un descuadre y la firma si una lectura la vio y la otra no.
-    - Un opcional ilegible que se dedujo en 0 (los demás montos ya suman el total) no es problema.
+      montos de un descuadre, los guardados con confianza baja y la firma si una lectura la vio y la
+      otra no.
     """
     fields = reading.normalized.fields
     required = required_fields(reading.doc_type, {name: f.status for name, f in fields.items()})
-    deduced = {i["field_name"] for i in reading.validation.issues if i["code"] == "OPCIONAL_DEDUCIDO"}
     missing, doubtful = set(), set()
     for name, item in fields.items():
         column = COLUMN_OF[name]
-        if item.status == "ILEGIBLE" and name not in deduced:
+        if item.status == "ILEGIBLE":
             (doubtful if item.raw_text else missing).add(column)
         elif item.status == "AUSENTE" and name in required:
             missing.add(column)
@@ -153,6 +234,9 @@ def field_problems(reading: Reading) -> tuple[list[str], list[str]]:
         doubtful |= {"total_neto", "iva", "total"}
         if any(reading.validation.amounts[name] is not None for name in OPTIONAL_AMOUNTS):
             doubtful.add("impuestos")
+    for name, item in fields.items():
+        if item.value is not None and item.low_confidence:
+            doubtful.add(COLUMN_OF[name])
     if reading.signature_doubtful:
         doubtful.add("firma")
     doubtful -= missing
@@ -167,6 +251,8 @@ def row_values(reading: Reading) -> dict:
     if any(v is not None and v != v.to_integral_value() for v in amounts.values()):
         observations = "NO_LEGIBLE"
         amounts = {name: Decimal(0) for name in amounts}
+    if reading.type_inferred and observations == "LEGIBLE":
+        observations = "NO_LEGIBLE"
 
     def whole(value):
         return None if value is None else int(value)
@@ -192,6 +278,8 @@ def row_values(reading: Reading) -> dict:
         "observaciones": observations,
         "campos_faltantes": missing,
         "campos_dudosos": doubtful,
+        "escalado": bool(escalation_reasons(reading)),
+        "denominacion": reading.denomination,
     }
 
 
@@ -237,6 +325,28 @@ def save(session: Session, reading: Reading, image_key: str, folder_id: int | No
         )
     session.refresh(row)
     return DocumentResult(code, "GUARDADO", id=row.id, folio=row.folio, observaciones=row.observaciones)
+
+
+def save_unknown(session: Session, image_key: str, folder_id: int | None = None) -> DocumentResult:
+    """Registra un documento que no es FC, CI ni GD (también una nota de crédito o una hoja adjunta sola):
+    tipo DESC, RUT 1-9 y folio 0000, sin datos leídos. Va a revisión humana."""
+    base = f"{UNKNOWN_CODE}_{SUBSTITUTE_RUT}_{UNKNOWN_FOLIO}"
+    name = images.free_name(session, base, PurePosixPath(image_key).suffix)
+    row = DocumentoProcesado(
+        rut_proveedor=SUBSTITUTE_RUT,
+        folio=UNKNOWN_FOLIO,
+        observaciones="DESCONOCIDO",
+        escalado=True,
+        id_tipo_documento=type_ids(session)[UNKNOWN_CODE],
+        imagen=name,
+        id_usuario=model_user_id(session),
+        id_carpeta=folder_id,
+    )
+    images.store_copy(image_key, name)
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return DocumentResult(UNKNOWN_CODE, "GUARDADO", id=row.id, folio=row.folio, observaciones=row.observaciones)
 
 
 # --- Archivos completos ----------------------------------------------------------------------
@@ -320,6 +430,34 @@ def _segment(
     return analyses
 
 
+def legibility(reading: Reading) -> tuple[int, float]:
+    """Cuánto se pudo leer de un documento: campos principales con valor y, para desempatar, la
+    confianza media de lo leído."""
+    fields = reading.normalized.fields
+    main = ("DOCUMENT_NUMBER", "ISSUE_DATE", "NET_AMOUNT", "VAT_AMOUNT", "TOTAL_AMOUNT")
+    read = [fields[name] for name in main if fields[name].value is not None]
+    count = len(read) + (0 if reading.normalized.rut_is_substitute else 1)
+    confidences = [item.confidence for item in read if item.confidence is not None]
+    return count, sum(confidences) / len(confidences) if confidences else 0.0
+
+
+def less_legible(found: list[GroupedDocument], readings: dict) -> set[int]:
+    """Varias boletas en la misma página: se guarda solo la más legible (no se mezclan datos de una con
+    otra). Un documento que ocupa varias páginas no compite: es un documento entero. Devuelve los
+    índices de los documentos que no se guardan."""
+    by_page: dict[int, list[int]] = {}
+    for number, document in enumerate(found):
+        pages = {region.page_id for region in document.regions}
+        if number in readings and isinstance(readings[number], Reading) and len(pages) == 1:
+            by_page.setdefault(pages.pop(), []).append(number)
+    dropped = set()
+    for numbers in by_page.values():
+        if len(numbers) > 1:
+            best = max(numbers, key=lambda n: legibility(readings[n]))
+            dropped |= {n for n in numbers if n != best}
+    return dropped
+
+
 def process_files(
     session: Session,
     files: list[FileInput],
@@ -361,21 +499,54 @@ def process_files(
 
     progress("Guardando")
     for index, found in documents.items():
+        # Lecturas de todos los documentos del archivo, para elegir el más legible de cada página
+        readings_of: dict[int, Reading | AIError] = {}
+        for number, document in enumerate(found):
+            if document.doc_type not in TYPE_CODES:
+                continue
+            first, second = (results.get(f"d{index}-{number}-{reading}") for reading in (1, 2))
+            failed = next((r for r in (first, second) if isinstance(r, AIError)), None)
+            if failed is not None:
+                readings_of[number] = failed
+                continue
+            reading = build_reading(
+                document.doc_type, first.parsed, second.parsed if second else None, title=document.evidence
+            )
+            reading.type_inferred = document.type_inferred
+            readings_of[number] = reading
+        dropped = less_legible(found, readings_of)
+        # Un archivo es desconocido (DESC) solo si no tiene ningún FC, CI ni GD. Si los tiene, lo demás
+        # que se vio (hojas tapadas debajo, trozos de papel) se descarta: no es un documento del lote
+        known = any(document.doc_type in TYPE_CODES for document in found)
+        unknown_saved = False
         for number, document in enumerate(found):
             if document.doc_type not in TYPE_CODES:
                 seen = f"título visto: {document.evidence}" if document.evidence else "sin título visible"
-                outcomes[index].documentos.append(
-                    DocumentResult("DESCONOCIDO", "DESCARTADO", mensaje=f"No es FC, CI ni GD ({seen}).")
-                )
+                if known or unknown_saved:
+                    result = DocumentResult(
+                        "DESC", "DESCARTADO", mensaje=f"Parte de la imagen que no es FC, CI ni GD ({seen}): se ignoró."
+                    )
+                else:
+                    result = save_unknown(session, files[index].imagen, folder_id)
+                    kind = "Nota de crédito" if "NOTA DE CREDITO" in segmenter.normalize_text(document.evidence or "") else "No es FC, CI ni GD"
+                    result.mensaje = f"{kind} ({seen}): se registró como desconocido y va a revisión."
+                    unknown_saved = True
+                outcomes[index].documentos.append(result)
                 continue
             first, second = (results.get(f"d{index}-{number}-{reading}") for reading in (1, 2))
+            reading = readings_of[number]
             # Sin la segunda lectura (si está activada) no se aceptan los datos
-            failed = next((r for r in (first, second) if isinstance(r, AIError)), None)
-            if failed is not None:
-                result = DocumentResult(TYPE_CODES[document.doc_type], "ERROR", mensaje=str(failed))
+            if isinstance(reading, AIError):
+                result = DocumentResult(TYPE_CODES[document.doc_type], "ERROR", mensaje=str(reading))
+            elif number in dropped:
+                result = DocumentResult(
+                    TYPE_CODES[document.doc_type], "DESCARTADO", folio=reading.normalized.fields["DOCUMENT_NUMBER"].value,
+                    mensaje="En la misma imagen hay otra boleta más legible: se guardó solo esa.",
+                )
             else:
-                reading = build_reading(document.doc_type, first.parsed, second.parsed if second else None)
                 result = save(session, reading, files[index].imagen, folder_id)
+                if document.type_inferred and result.resultado == "GUARDADO":
+                    result.mensaje = f"Título no visible: tipo deducido de \"{document.evidence}\". Va a revisión."
             outcomes[index].documentos.append(result)
             record_calls(session, "LECTURA_1", first, result.id)
             record_calls(session, "LECTURA_2", second, result.id)

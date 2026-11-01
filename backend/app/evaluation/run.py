@@ -34,7 +34,7 @@ from app.db import schema
 from app.evaluation.compare import OBSERVATIONS, TYPE_CODES, compare, report
 from app.models import DocumentoProcesado, TipoDocumento
 from app.pipeline.preprocess import detect_type
-from app.pipeline.process import AIUnavailable, DocumentResult, FileInput, process_files
+from app.pipeline.process import UNKNOWN_CODE, AIUnavailable, DocumentResult, FileInput, process_files
 from app.storage import get_storage, original_key
 
 SAMPLES = BACKEND_DIR.parent / "muestras"
@@ -84,12 +84,14 @@ def _summary(session: Session, results: list[DocumentResult]) -> dict:
         if result.resultado == "ERROR":
             errors.append(result.mensaje)
         row = _stored_row(session, result)
-        if row is None:
+        # Los desconocidos (DESC) no se comparan: en las respuestas no son documentos del lote
+        if row is None or result.tipo == UNKNOWN_CODE:
             continue
         documents.append(
             {
                 "tipo": result.tipo,
                 "estado": row.observaciones,
+                "escalado": row.escalado,
                 "rut": None if row.rut_proveedor == "1-9" else row.rut_proveedor,
                 "numero": row.folio,
                 "fecha": row.fecha.isoformat() if row.fecha else None,

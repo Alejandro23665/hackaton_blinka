@@ -27,11 +27,19 @@ Se define **solo** con los archivos SQL de [`db/`](db/), que se aplican en orden
 |---|---|
 | `roles` | `MODELO` (solo el usuario de la IA), `REVISOR` y `ADMINISTRADOR` |
 | `usuarios` | Nombre, email (único), hash de la contraseña, rol y `activo` (db/010: un perfil desactivado no inicia sesión). Incluye el usuario "Modelo IA", que no puede iniciar sesión |
-| `tipos_documentos` | `id` y `documento`, con solo 3 registros: FC (factura electrónica), CI (control interno), GD (guía de despacho) |
+| `tipos_documentos` | `id` y `documento`, con 4 registros: FC (factura electrónica), CI (control interno), GD (guía de despacho o guía electrónica) y DESC (desconocido, db/011) |
 | `carpetas` | Cada carpeta subida (db/009): nombre, fecha de subida y quién la subió. El nombre puede repetirse: cada subida es una carpeta distinta |
-| `documentos_procesados` | Una fila por documento: RUT del proveedor, folio, fecha, firma, neto, IVA, impuestos (otros impuestos + exento), total, observaciones (`LEGIBLE`, `NO_LEGIBLE`, `DESCUADRE`), tipo, imagen original, `id_usuario` (el Modelo IA o la persona que lo corrigió), `campos_faltantes` y `campos_dudosos`, `revisado_en`, `id_carpeta` (vacío si se subió suelto) y `requiere_revision` (se calcula sola: no legible o descuadre, y nadie lo ha revisado) |
+| `documentos_procesados` | Una fila por documento: RUT del proveedor, folio, fecha, firma, neto, IVA, impuestos (otros impuestos + exento), total, observaciones (`LEGIBLE`, `NO_LEGIBLE`, `DESCUADRE` o `DESCONOCIDO`), tipo, imagen original, `id_usuario` (el Modelo IA o la persona que lo corrigió), `campos_faltantes` y `campos_dudosos`, `revisado_en`, `id_carpeta` (vacío si se subió suelto) y `requiere_revision` (se calcula sola: no legible o descuadre, y nadie lo ha revisado) |
 
-- Los documentos desconocidos (boletas, notas de crédito…) se descartan: no se guardan.
+- Un archivo sin ningún FC, CI ni GD (boletas, notas de crédito…) se registra una vez, sin leer sus datos: tipo DESC,
+  RUT `1-9`, folio `0000` e imagen `DESC_1-9_0000` (`-2`, `-3`… si se repite). Queda `DESCONOCIDO` y no va a
+  revisión. Si el archivo sí tiene documentos válidos, lo demás que se ve (hojas tapadas, trozos de papel) se descarta.
+- Si el título está tapado o borroso, el tipo se puede deducir de una pista impresa que lo nombra: la hoja de
+  ingreso de OXXO ("Ing. Facturas Manuales" → FC, "Ing. Guías Manuales" → GD) o un trozo del título que aún dice
+  FACTURA o GUÍA. Esos documentos se leen, pero quedan `NO_LEGIBLE` para que una persona confirme el tipo. Un
+  trozo como "…TRÓNICA" o una frase del cuerpo no basta: queda DESC.
+- Un control interno debe ser del RUT `76084682-1` (`CONTROL_INTERNO_RUT`): con otro RUT queda `NO_LEGIBLE`,
+  con el RUT como dudoso, y va a revisión humana.
 - El mismo documento (tipo, RUT y folio) no se guarda dos veces; no aplica al RUT ilegible `1-9`.
 - Todo el sistema es del proyecto Oxxo: no hay tabla de proyectos.
 - `imagen` (db/008): nombre del archivo del documento, `TIPO_RUT_FOLIO` más su extensión (por ejemplo
@@ -101,10 +109,12 @@ npm run dev                      # http://localhost:5173
 **Interfaz** (pide iniciar sesión):
 - *Inicio:* el día (hoy o el que se elija) con los documentos subidos, los procesados por la IA,
   los que requieren revisión humana y los revisados por una persona.
-- *Subir:* imágenes o PDF sueltos, (hasta 50) o una carpeta completa (hasta 500, con subcarpetas; se ignora lo que no sea imagen o PDF), y el avance de cada trabajo (guardado, descartado, duplicado o error).
+- *Subir:* imágenes o PDF sueltos, (hasta 50) o una carpeta completa (hasta 500, con subcarpetas; se ignora lo que no sea imagen o PDF), y el avance de cada trabajo (guardado, duplicado o error).
 - *Revisión:* los pendientes, los más antiguos primero. Al abrir uno: la imagen a la izquierda y a
   la derecha el formulario con lo que leyó la IA, los campos que faltan (rojo) y los dudosos
-  (ámbar), y la suma de montos en vivo. Al guardar pasa al siguiente pendiente.
+  (ámbar), los RUT habituales del tipo (un clic los escribe) y la suma de montos en vivo. Sin cambios se
+  puede *Aceptar* (queda revisado tal como está, por ejemplo si no se puede leer mejor); con algún cambio se
+  activa *Guardar cambios*. Después pasa al siguiente pendiente.
 - *Documentos:* totales, filtros por tipo, observaciones y "requieren revisión", búsqueda por RUT o
   folio, filtro por carpeta, y el detalle de cada documento (quién lo procesó o revisó).
 - *Perfiles* (solo administradores): los perfiles del sistema; crear uno, cambiar su rol y
@@ -123,13 +133,14 @@ Todas las rutas, salvo `/health` y `/auth/login`, piden `Authorization: Bearer <
 | GET | `/auth/yo` | El usuario de la sesión |
 | POST | `/trabajos` | Sube imágenes o PDF (`files`); con `carpeta` (su nombre) la subida queda como una carpeta nueva y sus documentos asociados a ella. Responde al instante con el trabajo y procesa en segundo plano, de a un trabajo por vez |
 | GET | `/trabajos` | Trabajos recientes (desde que arrancó el servidor) |
-| GET | `/trabajos/{id}` | Avance: estado de cada archivo y qué pasó con cada documento (guardado, descartado, duplicado o error) |
+| GET | `/trabajos/{id}` | Avance: estado de cada archivo y qué pasó con cada documento (guardado, duplicado o error) |
 | GET | `/documentos` | Documentos (`orden`: `recientes` o `antiguos`). Filtros: `tipo`, `observaciones`, `requiere_revision`, `carpeta` (id), `q` (RUT o folio), `limite`, `desde` |
 | GET | `/carpetas` | Carpetas subidas, la más reciente primero, con sus documentos guardados y cuántos requieren revisión |
 | GET | `/documentos/resumen` | Totales por observaciones y por tipo, y cuántos requieren revisión |
 | GET | `/documentos/dia` | Totales de un día (`fecha`, por defecto hoy en `TIMEZONE`): subidos, procesados por la IA, pendientes y revisados |
 | GET | `/documentos/{id}` | Un documento |
 | PUT | `/documentos/{id}/correccion` | Una persona corrige o confirma los datos. Valida RUT y suma; un descuadre se guarda solo con `confirmar_descuadre` |
+| POST | `/documentos/{id}/aceptar` | Una persona lo acepta tal como está (sin cambios): queda revisado a su nombre, con sus datos y observaciones |
 | GET | `/documentos/{id}/imagen` | El archivo original del que salió |
 | GET | `/tipos-documentos` | FC, CI y GD |
 | GET | `/usuarios` | Perfiles (sin el Modelo IA). **Solo administradores**, como las tres siguientes |

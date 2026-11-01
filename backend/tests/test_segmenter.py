@@ -123,3 +123,33 @@ def test_only_first_document_of_a_page_can_continue():
 def test_low_quality_page_adds_warning():
     (doc,) = group_pages(_pages(page_response(detected(), quality="BAJA", issues=["borrosa"])))
     assert doc.issues[0]["code"] == "BAJA_CALIDAD_IMAGEN" and "borrosa" in doc.issues[0]["message"]
+
+
+@pytest.mark.parametrize(
+    "doc_type, evidence",
+    [
+        ("FACTURA_ELECTRONICA", "Ing.Facturas Manuales"),  # hoja de ingreso de OXXO
+        ("FACTURA_ELECTRONICA", "FACTURA ELEC"),  # título cortado por otro papel
+        ("GUIA_DESPACHO", "Ing. Guías Manuales"),
+    ],
+)
+def test_type_deduced_from_context_is_accepted_with_a_warning(doc_type, evidence):
+    final, issues = verify_type(doc_type, evidence, 0.9, "CONTEXTO")
+    assert final == doc_type and [i["code"] for i in issues] == ["TIPO_DEDUCIDO"]
+
+
+@pytest.mark.parametrize(
+    "doc_type, evidence, confidence",
+    [
+        ("FACTURA_ELECTRONICA", None, 0.9),  # sin ninguna pista
+        ("FACTURA_ELECTRONICA", "…TRÓNICA", 0.9),  # puede ser factura o guía
+        ("GUIA_DESPACHO", "…ÓNICA", 0.9),
+        ("GUIA_DESPACHO", "Guia No Constituye venta", 0.9),  # frase del cuerpo, no un título
+        ("FACTURA_ELECTRONICA", "GUIA ELECTRONICA", 0.9),  # la pista es el título de otro tipo
+        ("FACTURA_ELECTRONICA", "FACTURA EXENTA", 0.9),
+        ("FACTURA_ELECTRONICA", "Ing.Facturas Manuales", 0.5),  # pistas poco claras
+    ],
+)
+def test_weak_context_still_becomes_unknown(doc_type, evidence, confidence):
+    final, _ = verify_type(doc_type, evidence, confidence, "CONTEXTO")
+    assert final == "DESCONOCIDO"

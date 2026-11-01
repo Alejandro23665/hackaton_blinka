@@ -2,7 +2,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import auth, documentos, metricas, trabajos, usuarios
+from app.api import auth, citas, documentos, metricas, trabajos, usuarios
 from app.auth import admin_user, current_user
 from app.core.config import settings
 
@@ -17,11 +17,15 @@ app.add_middleware(
 
 # Todo lo que no es iniciar sesión pide una sesión válida (usuario de la tabla usuarios)
 app.include_router(auth.router)
+# Pedir una cita desde la página pública no necesita sesión
+app.include_router(citas.public)
 app.include_router(trabajos.router, dependencies=[Depends(current_user)])
 app.include_router(documentos.router, dependencies=[Depends(current_user)])
 app.include_router(metricas.router, dependencies=[Depends(current_user)])
 # Perfiles: solo administradores
 app.include_router(usuarios.router, dependencies=[Depends(admin_user)])
+# Las citas pedidas: solo administradores
+app.include_router(citas.router, dependencies=[Depends(admin_user)])
 
 
 @app.get("/health")

@@ -14,7 +14,7 @@ from app.ai import client
 from app.core.config import settings
 from app.pipeline.fields import FIELD_NAMES
 
-PROMPT_VERSION = "ext-13"
+PROMPT_VERSION = "ext-15"
 # Margen alrededor de la zona del documento al recortarla (proporción de la página)
 CROP_MARGIN = 0.03
 
@@ -77,6 +77,10 @@ class Extraction(BaseModel):
     notes: str | None
     # Rótulo impreso junto a la fecha usada para ISSUE_DATE (el código rechaza "referencia", "vencimiento"…)
     date_label: str | None = None
+    # La hoja adjunta (Informe Ingreso) tapa algún dato clave: no se registra ningún importe del documento
+    attached_sheet_covers_data: bool = False
+    # Factura: RUT del catálogo de RUT conocidos que la IA reconoce aunque el RUT impreso no se lea entero
+    catalog_rut: str | None = None
 
     def model_post_init(self, __context) -> None:
         missing = set(READ_FIELDS) - set(self.fields)
@@ -99,7 +103,10 @@ _FIELD_SCHEMA = {
 RESPONSE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["fields", "tax_lines", "signature", "transcription", "notes", "date_label"],
+    "required": [
+        "fields", "tax_lines", "signature", "transcription", "notes", "date_label",
+        "attached_sheet_covers_data", "catalog_rut",
+    ],
     "properties": {
         "fields": {
             "type": "object",
@@ -136,6 +143,14 @@ RESPONSE_SCHEMA = {
         },
         "transcription": {"type": "string", "description": "Todo el texto legible del documento, en orden de lectura"},
         "date_label": {"type": ["string", "null"], "description": "Rótulo impreso junto a la fecha de ISSUE_DATE; null si no tiene"},
+        "attached_sheet_covers_data": {
+            "type": "boolean",
+            "description": "true si la hoja adjunta (Informe Ingreso) tapa algún dato clave del documento",
+        },
+        "catalog_rut": {
+            "type": ["string", "null"],
+            "description": "Solo facturas: RUT del catálogo de RUT conocidos que corresponde sin duda al emisor; null si no",
+        },
         "notes": {"type": ["string", "null"], "description": "Problemas de lectura, en español; null si no hay"},
     },
 }
@@ -156,7 +171,7 @@ ejemplo "FECHA EMISION" o "FECHA :"), o null si no tiene rótulo.
 - EXEMPT_AMOUNT: monto exento.
 - TOTAL_AMOUNT: monto total.
 
-Y aparte, en tax_lines, CADA línea de impuesto por separado, con su nombre tal como aparece (label) y su monto (raw_text). Los impuestos posibles son: IVA (19 %), IABA 10%, IABA 18%, ILA VIN 20.5%, ILA CER 20.5%, ILA 31.5% (también impresos como ILL o "Imp. Adic."). Una entrada por línea; no las sumes ni incluyas neto, exento ni total. Si el monto de una línea está tapado (por ejemplo, por una perforación o un timbre) o no se lee, igualmente inclúyela con status ILEGIBLE y ? en lo que no se ve. Una línea de impuestos adicionales en 0 (por ejemplo "Impuestos: $0" o "Imp. Adic. 0") también se incluye, con 0. Si el documento no tiene ninguna línea de impuesto, tax_lines es una lista vacía.
+Y aparte, en tax_lines, CADA línea de impuesto por separado, con su nombre tal como aparece (label) y su monto (raw_text). Los impuestos posibles son: IVA (19 %), IABA 10%, IABA 18%, ILA VIN 20.5%, ILA CER 20.5%, ILA 31.5% (también impresos como ILL o "Imp. Adic."). Una retención (por ejemplo "Retención", "Ret. IVA" o "Impuesto retenido") también va en tax_lines, con su nombre tal como aparece: es un impuesto adicional, nunca el IVA. Una entrada por línea; no las sumes ni incluyas neto, exento ni total. Si el monto de una línea está tapado (por ejemplo, por una perforación o un timbre) o no se lee, igualmente inclúyela con status ILEGIBLE y ? en lo que no se ve. Una línea de impuestos adicionales en 0 (por ejemplo "Impuestos: $0" o "Imp. Adic. 0") también se incluye, con 0. Si el documento no tiene ninguna línea de impuesto, tax_lines es una lista vacía.
 
 Para cada campo devuelve:
 - status: LEIDO si aparece y lo lees con seguridad; AUSENTE si no aparece en el documento; \
@@ -182,13 +197,24 @@ documento. Esa hoja NO tiene un recuadro con "R.U.T.", el tipo de documento y "N
 ve debajo de él no se lee. Suele titularse "Informe Ingreso". Una factura o guía en tira térmica larga puede quedar partida por esa hoja: la parte de arriba (con el recuadro R.U.T., tipo y N°) y la parte de abajo (detalle, Neto, Impuestos, IVA, Total y el total en palabras) son el MISMO documento y se leen las dos; lo único que se ignora es la tira de en medio. Nunca tomes de ella el número, el neto, el IVA, los impuestos adicionales ni el total: los \
 campos se leen solo del documento, y su texto no va en transcription. Si esa hoja tapa un dato del \
 documento, ese campo es ILEGIBLE.
+- attached_sheet_covers_data: true SOLO si esa hoja adjunta (la del Informe Ingreso, sin recuadro R.U.T.) \
+está encima del documento y deja SIN PODER LEER alguno de sus datos clave: el RUT o el N° del recuadro, la \
+fecha de emisión, o el neto, IVA, impuestos o total del pie. Si esos datos se leen (aunque la hoja tape \
+el detalle de productos, los precios unitarios, el código de barras u otras partes), es false. Otro \
+documento real superpuesto (un CONTROL INTERNO o una GUÍA con su recuadro) no es la hoja adjunta: es false. \
+Si no hay hoja adjunta, es false.
+- catalog_rut: null salvo en facturas (ver la indicación del tipo).
 - signature: si el documento está FIRMADO. present es true si hay trazos manuscritos de recepción: una firma o rúbrica, o un nombre, RUT o fecha escritos a mano (normalmente con lápiz azul o negro, en la parte inferior, sobre o junto a un recuadro con "Nombre:", "RUT:", "Fecha:", "Recinto:" o "Firma:"). Un recuadro con esas etiquetas pero vacío, o solo texto impreso, es false. La firma puede estar en cualquier hoja: indica en region_index en cuál.
 - Lo escrito a mano en ese recuadro NO es un dato del documento: nunca uses ese RUT, nombre o fecha manuscritos para PROVIDER_RUT ni ISSUE_DATE.
 - notes: problemas de lectura en una frase, en español, o null."""
 
 _TYPE_HINTS = {
     "FACTURA_ELECTRONICA": "Es una FACTURA ELECTRÓNICA: normalmente tiene monto neto, IVA y total; "
-    "el monto exento solo aparece en facturas con ítems exentos.",
+    "el monto exento solo aparece en facturas con ítems exentos. RUT conocidos de los emisores de estas "
+    "facturas: {catalog}. Si el RUT impreso está borroso o incompleto, pero los dígitos visibles, el nombre "
+    "del emisor y la presentación de la factura permiten identificar SIN DUDA uno de ellos, ponlo en "
+    "catalog_rut (PROVIDER_RUT sigue siendo lo que se lee, con ? en lo que no se ve). Nunca elijas uno solo "
+    "porque está en la lista: si hay varios posibles o no hay evidencia, catalog_rut es null.",
     "GUIA_DESPACHO": "Es una GUÍA DE DESPACHO (también titulada GUÍA ELECTRÓNICA): puede no tener montos "
     "(traslado sin valorizar); si no hay ninguna sección de montos, marca los cuatro montos como AUSENTE. "
     "A menudo es un ticket térmico (por ejemplo de OXXO): RUT y número en el recuadro superior, \"FECHA :\" "
@@ -226,11 +252,8 @@ def document_request(key: str, doc_type: str, images: list[tuple[bytes, str]], r
     `reading` distingue lecturas independientes del mismo documento (la segunda es la verificación):
     lo que se lee con nitidez sale igual; lo que el modelo adivina tiende a variar.
     """
-    content = [
-        client.text_part(
-            f"{_TYPE_HINTS[doc_type]} El documento tiene {len(images)} imagen(es)."
-        )
-    ]
+    hint = _TYPE_HINTS[doc_type].format(catalog=", ".join(settings.KNOWN_INVOICE_RUTS))
+    content = [client.text_part(f"{hint} El documento tiene {len(images)} imagen(es).")]
     for number, (jpeg, description) in enumerate(images, start=1):
         content.append(client.text_part(f"Imagen {number}: {description}"))
         content.append(client.image_part(jpeg))

@@ -1,65 +1,90 @@
 @import 'tailwindcss';
 
 /*
- * Tokens de diseño de Blinka (Light Mode Premium).
+ * Tokens de diseño de Veriq.
  * Tailwind v4 genera utilidades a partir de @theme: bg-brand-600, text-ink, rounded-card, shadow-card…
+ * Paleta de marca: violeta principal #6941C6 (brand-600), morado oscuro #241345 (brand-950),
+ * gris claro #F2F4F7 (surface) y blanco (canvas). El violeta es acento, nunca el fondo dominante.
  */
 @theme {
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
 
-  /* Identidad: morado como acento, nunca como fondo dominante */
-  --color-brand-50: #f6f4fd;
-  --color-brand-100: #ede9fe;
-  --color-brand-200: #ddd6fe;
-  --color-brand-300: #c4b5fd;
-  --color-brand-400: #a78bfa;
-  --color-brand-500: #8b5cf6;
-  --color-brand-600: #6d28d9;
-  --color-brand-700: #5b21b6;
-  --color-brand-800: #4c1d95;
-  --color-brand-900: #2e1065;
+  /* Violeta de marca, del más claro al morado oscuro */
+  --color-brand-25: #fbfaff;
+  --color-brand-50: #f5f2fc;
+  --color-brand-100: #ece6fa;
+  --color-brand-200: #dacff4;
+  --color-brand-300: #bfaeec;
+  --color-brand-400: #9f86df;
+  --color-brand-500: #8463d3;
+  --color-brand-600: #6941c6; /* violeta principal: 6,6:1 sobre blanco */
+  --color-brand-700: #5533a8;
+  --color-brand-800: #432985;
+  --color-brand-900: #321e63;
+  --color-brand-950: #241345; /* morado oscuro */
 
-  /* Neutros */
+  /* Neutros (levemente teñidos hacia el morado de la marca) */
   --color-canvas: #ffffff;
-  --color-surface: #f7f6fa;
-  --color-surface-strong: #efedf5;
-  --color-line: #e9e7f0;
-  --color-line-strong: #d9d6e3;
-  --color-ink: #1f1b2d;
-  --color-muted: #625d74; /* texto secundario: 6.2:1 sobre blanco */
-  --color-subtle: #8a859b; /* solo para texto auxiliar no esencial */
+  --color-surface: #f2f4f7; /* gris claro: fondo de la aplicación */
+  --color-surface-strong: #e8ebf0;
+  --color-line: #e4e7ec;
+  --color-line-strong: #d0d5dd;
+  --color-ink: #17132b;
+  --color-muted: #4f4b63; /* texto secundario: 8:1 sobre blanco */
+  --color-subtle: #67637a; /* texto auxiliar: 5,6:1 sobre blanco, 5:1 sobre gris claro */
 
-  /* Semánticos (suaves) */
+  /* Semánticos */
   --color-success-50: #ecfdf3;
-  --color-success-600: #0f8a4f;
+  --color-success-100: #d1fadf;
+  --color-success-600: #079455;
   --color-success-700: #067647;
-  --color-warning-50: #fff8eb;
-  --color-warning-600: #b54708;
-  --color-warning-700: #93370d;
-  --color-danger-50: #fef2f2;
-  --color-danger-600: #c0262d;
-  --color-danger-700: #a3161f;
+  --color-warning-50: #fffaeb;
+  --color-warning-100: #fef0c7;
+  --color-warning-600: #dc6803;
+  --color-warning-700: #b54708;
+  --color-danger-50: #fef3f2;
+  --color-danger-100: #fee4e2;
+  --color-danger-600: #d92d20;
+  --color-danger-700: #b42318;
+  /* Procesamiento (trabajos en curso): azul, para no confundirlo con "requiere revisión" (violeta) */
+  --color-info-50: #eff8ff;
+  --color-info-100: #d1e9ff;
+  --color-info-600: #1570ef;
+  --color-info-700: #175cd3;
+  /* Desconocido: gris pizarra, distinto del gris de la interfaz */
+  --color-slate-50: #eef1f6;
+  --color-slate-100: #dfe4ed;
+  --color-slate-600: #5d6b82;
+  --color-slate-700: #3e4a5e;
 
-  --radius-card: 18px;
-  --radius-control: 12px;
+  --radius-card: 14px;
+  --radius-control: 9px;
 
-  --shadow-card: 0 1px 2px rgb(31 27 45 / 0.04), 0 8px 24px -12px rgb(31 27 45 / 0.08);
-  --shadow-pop: 0 2px 6px rgb(31 27 45 / 0.06), 0 24px 48px -16px rgb(31 27 45 / 0.18);
-  --shadow-control: 0 1px 2px rgb(31 27 45 / 0.06);
+  --shadow-card: 0 1px 2px rgb(23 19 43 / 0.05), 0 1px 3px rgb(23 19 43 / 0.03);
+  --shadow-pop: 0 4px 8px -2px rgb(23 19 43 / 0.08), 0 16px 32px -8px rgb(23 19 43 / 0.16);
+  --shadow-control: 0 1px 2px rgb(23 19 43 / 0.06);
+  --shadow-brand: 0 1px 2px rgb(36 19 69 / 0.2), inset 0 1px 0 rgb(255 255 255 / 0.14);
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+
+  --animate-enter: enter 200ms var(--ease-out);
+  --animate-progress: progress 1.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
 }
 
 @layer base {
   html {
     -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
   }
 
   body {
-    @apply bg-canvas font-sans text-ink antialiased;
-    font-feature-settings: 'cv11', 'ss01';
+    @apply bg-surface font-sans text-ink antialiased;
+    font-feature-settings: 'ss01';
   }
 
   ::selection {
-    @apply bg-brand-100 text-brand-800;
+    @apply bg-brand-100 text-brand-900;
   }
 
   /* Anillo de foco visible y consistente solo con teclado */
@@ -74,18 +99,31 @@
     outline: none;
   }
 
+  /* Los iconos de los botones no deben robar el foco ni el clic */
+  button svg {
+    pointer-events: none;
+  }
+
   .tabular {
     font-variant-numeric: tabular-nums;
   }
 }
 
-/* Barra indeterminada mientras el agente lee una factura */
-@keyframes upload {
+/* Entrada de una vista: un leve desplazamiento hacia arriba, sin rebote */
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* Barra indeterminada mientras el agente lee un archivo */
+@keyframes progress {
   from {
     transform: translateX(-100%);
   }
   to {
-    transform: translateX(300%);
+    transform: translateX(250%);
   }
 }
 
@@ -97,11 +135,26 @@
   }
 }
 
+/* Trama diagonal con el ángulo de las bandas de la V (para superficies de marca, muy tenue) */
+@utility v-hatch {
+  background-image: repeating-linear-gradient(
+    -56deg,
+    rgb(255 255 255 / 0.05) 0 1px,
+    transparent 1px 22px
+  );
+}
+
+/* Esquina cortada en diagonal, como el extremo de una banda de la V */
+@utility v-cut {
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }

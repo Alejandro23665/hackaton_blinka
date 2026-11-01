@@ -1,8 +1,10 @@
 """Agente A — Segmentador-clasificador (IA, una llamada por página).
 
 Mira una página y dice qué documentos hay en ella, de qué tipo es cada uno y con qué evidencia
-(el título impreso). El código revisa después su respuesta (`verify_type`): sin evidencia o con
-poca confianza, el documento queda como DESCONOCIDO. La IA propone, el código decide.
+(el título impreso o, si el título está tapado o borroso, lo que permite deducir el tipo). El código
+revisa después su respuesta (`verify_type`): sin evidencia o con poca confianza, el documento queda
+como DESCONOCIDO. Un tipo deducido sin ver el título se acepta, pero el documento va a revisión
+humana. La IA propone, el código decide.
 """
 import re
 import unicodedata
@@ -13,9 +15,11 @@ from pydantic import BaseModel, Field
 from app.ai import client
 from app.core.config import settings
 
-PROMPT_VERSION = "seg-6"
+PROMPT_VERSION = "seg-9"
 
 DocType = Literal["GUIA_DESPACHO", "CONTROL_INTERNO", "FACTURA_ELECTRONICA", "DESCONOCIDO"]
+# En qué se basa el tipo: el título impreso completo, o el contexto (título tapado, cortado o borroso)
+TypeBasis = Literal["TITULO", "CONTEXTO"]
 
 
 class Region(BaseModel):
@@ -33,6 +37,7 @@ class PageQuality(BaseModel):
 class DetectedDocument(BaseModel):
     index: int
     doc_type: DocType
+    type_basis: TypeBasis = "TITULO"
     confidence: float = Field(ge=0, le=1)
     evidence: str | None
     document_number_seen: str | None
@@ -75,7 +80,7 @@ RESPONSE_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "required": [
-                    "index", "doc_type", "confidence", "evidence", "document_number_seen",
+                    "index", "doc_type", "type_basis", "confidence", "evidence", "document_number_seen",
                     "continuation_of_previous", "region", "position_hint",
                 ],
                 "properties": {
@@ -84,8 +89,13 @@ RESPONSE_SCHEMA = {
                         "type": "string",
                         "enum": ["GUIA_DESPACHO", "CONTROL_INTERNO", "FACTURA_ELECTRONICA", "DESCONOCIDO"],
                     },
+                    "type_basis": {
+                        "type": "string",
+                        "enum": ["TITULO", "CONTEXTO"],
+                        "description": "TITULO: el título impreso se lee completo; CONTEXTO: el tipo se deduce sin verlo entero",
+                    },
                     "confidence": _number("Seguridad en el tipo, de 0 a 1"),
-                    "evidence": _nullable("string", "Copia literal del título impreso; null si no se ve"),
+                    "evidence": _nullable("string", "Copia literal del título impreso o, con CONTEXTO, del texto que permite deducir el tipo; null si no hay"),
                     "document_number_seen": _nullable("string", "Número o folio tal como aparece; null si no se ve"),
                     "continuation_of_previous": {"type": "boolean"},
                     "region": {
@@ -110,16 +120,24 @@ SYSTEM_PROMPT = """Eres el segmentador-clasificador de un sistema de captura de 
 chilenos. Recibes la imagen de UNA página de un lote escaneado o fotografiado y dices qué documentos \
 aparecen en ella y de qué tipo es cada uno.
 
-Tipos admitidos, solo si ves el título impreso en el documento:
+Tipos admitidos (type_basis dice en qué te basas; ver las reglas):
 - FACTURA_ELECTRONICA: el título dice "FACTURA ELECTRÓNICA".
 - GUIA_DESPACHO: el título dice "GUÍA DE DESPACHO" (con o sin "ELECTRÓNICA") o solo "GUÍA ELECTRÓNICA". También suele ser un ticket térmico (por ejemplo de OXXO) con un recuadro "R.U.T. / GUIA ELECTRÓNICA / N°", montos NETO, EXENTO, IVA y TOTAL y un timbre electrónico del SII (código de barras) abajo.
 - CONTROL_INTERNO: el título dice "CONTROL INTERNO". Suele ser un ticket de papel térmico angosto (por ejemplo de OXXO) con un recuadro que dice "R.U.T.", "CONTROL INTERNO" y "N°", y abajo NETO, EXENTO, IVA y TOTAL. Aunque parezca una boleta, si el recuadro dice CONTROL INTERNO es un CONTROL_INTERNO.
 - DESCONOCIDO: todo lo demás: boletas, facturas exentas o no afectas, notas de crédito o débito, \
-facturas de compra, liquidaciones, fotos, páginas en blanco, o documentos cuyo título no se ve o no se lee.
+facturas de compra, liquidaciones, fotos, páginas en blanco, o documentos cuyo tipo no se puede deducir.
 
 Reglas:
-- evidence: copia literal del título que viste, tal cual aparece. Si no hay un título visible, null. \
-Nunca inventes ni completes la evidencia.
+- type_basis = TITULO si lees el título impreso completo. evidence: copia literal de ese título, tal cual aparece.
+- type_basis = CONTEXTO si el título está tapado por otro papel, cortado o demasiado borroso, pero un \
+texto impreso NOMBRA el tipo. Pistas válidas: la hoja de ingreso de OXXO corcheteada al documento, cuyo \
+encabezado dice "Ing. Facturas Manuales" (es una FACTURA_ELECTRONICA) o "Ing. Guías Manuales" (es una \
+GUIA_DESPACHO); o un trozo legible del título que todavía contiene la palabra FACTURA o GUÍA (por ejemplo \
+"FACTURA ELEC…"). Un trozo sin esa palabra ("…TRÓNICA", "…ÓNICA") no basta: puede ser factura o guía, y es \
+DESCONOCIDO. Tampoco valen frases del cuerpo o del pie del documento, como "Guía No Constituye venta" u \
+"Observaciones": solo el título o el encabezado de la hoja de ingreso. evidence: copia literal del texto en \
+que te basas. Las notas escritas a mano (por ejemplo "Firma en Factura") nunca son evidencia.
+- Nunca inventes ni completes la evidencia. Si no hay ninguna, evidence es null.
 - Si dudas del tipo, usa DESCONOCIDO: es preferible a equivocarse.
 - Una página puede tener varios documentos (por ejemplo, dos facturas fotografiadas juntas): devuelve \
 uno por documento, numerados de izquierda a derecha y de arriba abajo.
@@ -127,7 +145,7 @@ uno por documento, numerados de izquierda a derecha y de arriba abajo.
 con un número arriba, una lista de productos con código, descripción y cantidad, y al final las líneas \
 "Neto", "Iva", "Imp Adic." y "Total". Suele estar corcheteada o superpuesta sobre el documento real. \
 Esa hoja NO tiene un recuadro con "R.U.T.", el tipo de documento y "N°". Un ticket térmico CON ese recuadro (por ejemplo un CONTROL INTERNO o una GUÍA ELECTRÓNICA de OXXO) es un documento real, nunca la hoja adjunta, aunque esté superpuesto sobre otro papel. \
-No es un documento del lote: no la devuelvas como documento ni uses su número o su título. Suele titularse "Informe Ingreso". Una factura o guía en tira térmica larga puede quedar partida por esa hoja: la parte de arriba (con el recuadro R.U.T., tipo y N°) y la parte de abajo (detalle, Neto, Impuestos, IVA, Total y el total en palabras) son el MISMO documento y se leen las dos; lo único que se ignora es la tira de en medio. \
+No es un documento del lote: no la devuelvas como documento ni uses su número. Suele titularse "Informe Ingreso"; si su encabezado dice "Ing. Facturas Manuales" o "Ing. Guías Manuales", solo sirve como pista del tipo del documento al que está adjunta (type_basis CONTEXTO). Una factura o guía en tira térmica larga puede quedar partida por esa hoja: la parte de arriba (con el recuadro R.U.T., tipo y N°) y la parte de abajo (detalle, Neto, Impuestos, IVA, Total y el total en palabras) son el MISMO documento y se leen las dos; lo único que se ignora es la tira de en medio. \
 Su zona (region) abarca las dos partes, de la cabecera al total. Si tapa parte \
 de un documento, informa solo ese documento, con su zona completa. Solo si en la página no hay nada más \
 que esa hoja, devuelve un único elemento DESCONOCIDO de página completa.
@@ -138,8 +156,8 @@ anterior (por ejemplo, la segunda hoja de la misma factura: sin título nuevo, e
 - document_number_seen: número o folio del documento como aparece (de "N° 001234" copia "001234"), o null.
 - region: zona aproximada del documento en proporciones de la página (x, y: esquina superior \
 izquierda; w, h: ancho y alto; todo entre 0 y 1). Si es el único documento de la página, usa x=0, y=0, w=1, h=1.
-- confidence: de 0 a 1, tu seguridad en el tipo. Por debajo de 0.7 si el título está borroso, \
-cortado o tapado.
+- confidence: de 0 a 1, tu seguridad en el tipo. Con CONTEXTO, por debajo de 0.7 si las pistas no \
+dejan claro el tipo.
 - page_quality: ALTA, MEDIA o BAJA, y en issues los problemas visibles (borrosa, cortada, sombra, \
 girada…), en español. Lista vacía si no hay."""
 
@@ -181,6 +199,15 @@ _REQUIRED = {
     "GUIA_DESPACHO": ("GUIA DE DESPACHO", "GUIA ELECTRONICA"),
     "CONTROL_INTERNO": ("CONTROL INTERNO",),
 }
+# Aviso de un tipo deducido sin ver el título completo: el documento va a revisión humana
+TYPE_INFERRED = "TIPO_DEDUCIDO"
+# Sin el título completo, la pista debe nombrar el tipo ("Ing. Facturas Manuales", "FACTURA ELEC…"):
+# un trozo como "…TRÓNICA" puede ser de una factura o de una guía
+_CONTEXT_HINTS = {
+    "FACTURA_ELECTRONICA": ("FACTURA ELEC", "FACTURAS MANUALES"),
+    "GUIA_DESPACHO": ("GUIA DE DESP", "GUIA ELEC", "GUIAS MANUALES"),
+    "CONTROL_INTERNO": ("CONTROL INT",),
+}
 # Documentos parecidos que no son del tipo admitido (factura exenta, liquidación-factura…)
 _EXCLUDED = {"FACTURA_ELECTRONICA": ("EXENTA", "NO AFECTA", "LIQUIDACION", "NOTA DE CREDITO", "NOTA DE DEBITO")}
 
@@ -197,12 +224,22 @@ def normalize_number(number: str | None) -> str | None:
     return digits or None
 
 
-def verify_type(doc_type: str, evidence: str | None, confidence: float) -> tuple[str, list[dict]]:
-    """Acepta el tipo propuesto solo con evidencia literal y confianza suficiente."""
+def verify_type(doc_type: str, evidence: str | None, confidence: float, basis: str = "TITULO") -> tuple[str, list[dict]]:
+    """Acepta el tipo propuesto solo con evidencia literal y confianza suficiente.
+
+    Con el título completo (TITULO), la evidencia debe contenerlo. Deducido del contexto (CONTEXTO: título
+    tapado o borroso), basta una evidencia literal que no sea el título de otro tipo; el documento se
+    acepta con el aviso TIPO_DEDUCIDO y va a revisión humana.
+    """
     if doc_type == "DESCONOCIDO":
         return doc_type, []
     plain = normalize_text(evidence or "")
-    matches = any(title in plain for title in _REQUIRED[doc_type])
+    if basis == "CONTEXTO":
+        others = [title for other, titles in _REQUIRED.items() if other != doc_type for title in titles]
+        hinted = any(hint in plain for hint in _CONTEXT_HINTS[doc_type])
+        matches = hinted and not any(title in plain for title in others)
+    else:
+        matches = any(title in plain for title in _REQUIRED[doc_type])
     if not matches or any(word in plain for word in _EXCLUDED.get(doc_type, ())):
         return "DESCONOCIDO", [
             {
@@ -222,6 +259,15 @@ def verify_type(doc_type: str, evidence: str | None, confidence: float) -> tuple
                     f"{settings.CLASSIFICATION_MIN_CONFIDENCE:.2f}."
                 ),
                 "details": {"proposed": doc_type, "confidence": confidence},
+            }
+        ]
+    if basis == "CONTEXTO":
+        return doc_type, [
+            {
+                "code": TYPE_INFERRED,
+                "severity": "ADVERTENCIA",
+                "message": f"Título no visible: el tipo se dedujo de \"{evidence}\". Una persona debe confirmarlo.",
+                "details": {"proposed": doc_type, "evidence": evidence},
             }
         ]
     return doc_type, []

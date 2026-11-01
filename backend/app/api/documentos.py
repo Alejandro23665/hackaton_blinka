@@ -16,6 +16,7 @@ from app.auth import CurrentUser
 from app.core.config import settings
 from app.models import Carpeta, DocumentoProcesado, TipoDocumento, Usuario
 from app.pipeline import images
+from app.pipeline.fields import SUBSTITUTE_RUT
 from app.pipeline.normalize import parse_document_number, parse_rut
 from app.storage import document_key, get_storage
 
@@ -41,6 +42,8 @@ class DocumentoRead(BaseModel):
     iva: int | None
     total: int | None
     observaciones: str
+    escalado: bool  # el procesamiento lo mandó a revisión humana
+    denominacion: str | None  # guías: GUIA_DESPACHO o GUIA_ELECTRONICA
     requiere_revision: bool
     campos_faltantes: list[str]
     campos_dudosos: list[str]
@@ -77,7 +80,7 @@ class Resumen(BaseModel):
 class Dia(BaseModel):
     fecha: date
     registrados: int  # documentos guardados ese día
-    procesados_ia: int  # legibles sin intervención de una persona
+    procesados_ia: int  # resueltos por la IA: no escalados ni revisados por una persona
     requieren_revision: int  # pendientes de revisión humana
     revisados: int  # corregidos o confirmados por una persona
     pendientes_total: int  # pendientes de revisión de todos los días
@@ -87,9 +90,11 @@ class Correccion(BaseModel):
     """Los datos que confirma o corrige una persona."""
 
     tipo: Literal["FC", "CI", "GD"]
-    rut_proveedor: str
-    folio: str = Field(min_length=1, max_length=20)
-    fecha: date
+    # Lo que no se puede leer en el documento va vacío y el documento queda NO_LEGIBLE, como al
+    # procesarlo: un RUT ilegible se guarda 1-9; el folio, la fecha y los montos, sin valor
+    rut_proveedor: str | None = None
+    folio: str | None = Field(None, max_length=20)
+    fecha: date | None = None
     firma: bool
     total_neto: int | None = Field(None, ge=0)
     iva: int | None = Field(None, ge=0)
@@ -125,8 +130,8 @@ def list_types(session: SessionDep):
 @router.get("/documentos", response_model=DocumentoPage)
 def list_documents(
     session: SessionDep,
-    tipo: str | None = Query(None, description="FC, CI o GD"),
-    observaciones: str | None = Query(None, description="LEGIBLE, NO_LEGIBLE o DESCUADRE"),
+    tipo: str | None = Query(None, description="FC, CI, GD o DESC"),
+    observaciones: str | None = Query(None, description="LEGIBLE, NO_LEGIBLE, DESCUADRE o DESCONOCIDO"),
     requiere_revision: bool | None = None,
     q: str | None = Query(None, description="Busca en RUT y folio"),
     carpeta: int | None = Query(None, description="Id de la carpeta subida"),
@@ -209,7 +214,11 @@ def day(session: SessionDep, fecha: date | None = Query(None, description="Por d
     registered, by_ai, pending, by_person = session.exec(
         select(
             func.count(),
-            count((DocumentoProcesado.observaciones == "LEGIBLE") & ~reviewed),
+            count(
+                ~col(DocumentoProcesado.escalado)
+                & (DocumentoProcesado.observaciones != "DESCONOCIDO")
+                & ~reviewed
+            ),
             count(col(DocumentoProcesado.requiere_revision)),
             count(reviewed),
         ).where(_local_day(col(DocumentoProcesado.creado_en)) == day_value)
@@ -237,20 +246,39 @@ def get_document(documento_id: int, session: SessionDep):
     return _read(*_get(session, documento_id))
 
 
+@router.post("/documentos/{documento_id}/aceptar", response_model=DocumentoRead)
+def accept(documento_id: int, session: SessionDep, user: CurrentUser):
+    """Una persona acepta el documento tal como está, sin cambiar nada (por ejemplo, un NO_LEGIBLE que
+    no se puede leer mejor). Conserva sus datos y observaciones, queda a su nombre y sale de la cola."""
+    row, *_ = _get(session, documento_id)
+    row.id_usuario = user.id
+    row.revisado_en = datetime.now(timezone.utc)
+    session.add(row)
+    session.commit()
+    return _read(*_get(session, documento_id))
+
+
 @router.put("/documentos/{documento_id}/correccion", response_model=DocumentoRead)
 def correct(documento_id: int, data: Correccion, session: SessionDep, user: CurrentUser):
     """Una persona corrige o confirma los datos. Queda a su nombre y sale de la cola de revisión.
 
     Se aplican las mismas reglas que al procesar: RUT con dígito verificador correcto y
     neto + IVA + impuestos = total. Si no cuadra, solo se guarda si la persona confirma el descuadre.
+    Ningún dato es obligatorio: lo que no se puede leer queda vacío y el documento se guarda NO_LEGIBLE.
+    Lo que sí se escribe debe ser válido (un RUT con dígito verificador incorrecto se rechaza).
     """
     row, *_ = _get(session, documento_id)
-    rut = parse_rut(data.rut_proveedor)
-    if rut.value is None:
-        raise HTTPException(422, f"RUT no válido: {rut.reason}")
-    folio = parse_document_number(data.folio)
-    if folio.value is None:
-        raise HTTPException(422, f"Folio no válido: {folio.reason}")
+    rut_value, folio_value = SUBSTITUTE_RUT, None
+    if data.rut_proveedor and data.rut_proveedor.strip():
+        rut = parse_rut(data.rut_proveedor)
+        if rut.value is None:
+            raise HTTPException(422, f"RUT no válido: {rut.reason}")
+        rut_value = rut.value
+    if data.folio and data.folio.strip():
+        folio = parse_document_number(data.folio)
+        if folio.value is None:
+            raise HTTPException(422, f"Folio no válido: {folio.reason}")
+        folio_value = folio.value
 
     amounts = (data.total_neto, data.iva, data.impuestos, data.total)
     unvalued_guide = data.tipo == "GD" and all(a is None for a in amounts)
@@ -258,11 +286,10 @@ def correct(documento_id: int, data: Correccion, session: SessionDep, user: Curr
         observations = "LEGIBLE"
     else:
         missing = [name for name in ("total_neto", "iva", "total") if getattr(data, name) is None]
-        if missing:
-            raise HTTPException(422, "Faltan montos obligatorios: " + ", ".join(missing))
-        difference = data.total - (data.total_neto + data.iva + (data.impuestos or 0))
-        observations = "LEGIBLE"
-        if abs(Decimal(difference)) > settings.TOTAL_TOLERANCE_CLP:
+        # Sin todos los montos la suma no se puede comprobar
+        difference = None if missing else data.total - (data.total_neto + data.iva + (data.impuestos or 0))
+        observations = "NO_LEGIBLE" if missing else "LEGIBLE"
+        if difference is not None and abs(Decimal(difference)) > settings.TOTAL_TOLERANCE_CLP:
             if not data.confirmar_descuadre:
                 raise HTTPException(
                     422,
@@ -270,11 +297,15 @@ def correct(documento_id: int, data: Correccion, session: SessionDep, user: Curr
                     "Revisa los montos o confirma que el documento trae ese descuadre.",
                 )
             observations = "DESCUADRE"
+    # Falta un dato obligatorio, como al procesar (un descuadre confirmado se conserva)
+    unreadable = rut_value == SUBSTITUTE_RUT or folio_value is None or data.fecha is None
+    if unreadable and observations == "LEGIBLE":
+        observations = "NO_LEGIBLE"
 
     type_id = session.exec(select(TipoDocumento.id).where(TipoDocumento.documento == data.tipo)).one()
     row.id_tipo_documento = type_id
-    row.rut_proveedor = rut.value
-    row.folio = folio.value
+    row.rut_proveedor = rut_value
+    row.folio = folio_value
     row.fecha = data.fecha
     row.firma = data.firma
     row.total_neto, row.iva, row.impuestos, row.total = amounts

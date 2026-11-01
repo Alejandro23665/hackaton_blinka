@@ -71,8 +71,10 @@ export default function UploadZone({ onUploaded }) {
     }
   }
 
+  const tooMany = folder && files.length > MAX_FOLDER_FILES
+
   return (
-    <Card title="Subir documentos" subtitle="Imágenes o PDF con guías de despacho, controles internos o facturas electrónicas">
+    <Card title="Subir documentos" subtitle="Guías de despacho, controles internos o facturas electrónicas, en imagen o PDF.">
       <label
         htmlFor={inputId}
         onDragOver={(e) => {
@@ -85,15 +87,31 @@ export default function UploadZone({ onUploaded }) {
           setDragging(false)
           add(Array.from(e.dataTransfer.files).filter((f) => EXTENSIONS.test(f.name)))
         }}
-        className={`flex cursor-pointer flex-col items-center justify-center rounded-control border-2 border-dashed px-4 py-8 text-center transition-colors ${
-          dragging ? 'border-brand-600 bg-brand-50' : 'border-line-strong hover:border-brand-300 hover:bg-brand-50/50'
+        className={`group relative flex cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[12px] border-[1.5px] border-dashed px-5 py-10 text-center transition-[border-color,background-color] duration-150 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-brand-600 ${
+          dragging ? 'border-brand-600 bg-brand-50' : 'border-line-strong bg-surface/50 hover:border-brand-400 hover:bg-brand-25'
         }`}
       >
-        <span className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-brand-100 text-brand-700">
-          <Icon name="upload" size={20} />
+        <span
+          className={`mb-4 flex h-12 w-12 items-center justify-center rounded-[12px] bg-canvas text-brand-600 shadow-card ring-1 ring-line transition-transform duration-200 ease-out ${
+            dragging ? '-translate-y-1 scale-105' : 'group-hover:-translate-y-0.5'
+          }`}
+        >
+          <Icon name="upload" size={22} />
         </span>
-        <span className="text-sm font-medium text-ink">Arrastra los archivos aquí o haz clic para elegirlos</span>
-        <span className="mt-1 text-xs text-muted">PDF (de varias páginas), JPG, PNG o WEBP · varios archivos a la vez</span>
+        <span className="text-[15px] font-semibold text-ink">
+          {dragging ? 'Suelta los archivos para añadirlos' : 'Arrastra los archivos aquí'}
+        </span>
+        <span className="mt-1 text-[13px] text-muted">
+          o <span className="font-medium text-brand-700 underline decoration-brand-300 underline-offset-2">elígelos en tu equipo</span>
+        </span>
+        <span className="mt-4 flex flex-wrap justify-center gap-1.5">
+          {['PDF', 'JPG', 'PNG', 'WEBP'].map((ext) => (
+            <span key={ext} className="rounded-md bg-canvas px-1.5 py-0.5 font-mono text-[10.5px] text-subtle ring-1 ring-line">
+              {ext}
+            </span>
+          ))}
+        </span>
+        <span className="mt-2 text-xs text-subtle">PDF de varias páginas y varios archivos a la vez</span>
         <input
           id={inputId}
           type="file"
@@ -107,9 +125,13 @@ export default function UploadZone({ onUploaded }) {
         />
       </label>
 
-      <label className="mt-3 flex cursor-pointer items-center justify-center gap-2 rounded-control border border-line px-4 py-2.5 text-sm font-medium text-ink transition-colors hover:border-brand-300 hover:bg-brand-50/50">
-        <Icon name="folder" size={16} className="text-brand-700" />
-        Subir una carpeta completa
+      <label className="mt-3 flex cursor-pointer items-center gap-3 rounded-control border border-line px-3.5 py-2.5 text-sm transition-colors hover:border-brand-300 hover:bg-brand-25 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-brand-600">
+        <Icon name="folder" size={18} className="text-brand-600" />
+        <span className="min-w-0 flex-1">
+          <span className="block font-medium text-ink">Subir una carpeta completa</span>
+          <span className="block text-xs text-subtle">Con sus subcarpetas · hasta {MAX_FOLDER_FILES} archivos</span>
+        </span>
+        <Icon name="chevronRight" size={16} className="text-subtle" />
         <input
           type="file"
           webkitdirectory=""
@@ -122,11 +144,11 @@ export default function UploadZone({ onUploaded }) {
       </label>
 
       {folder && (
-        <div className="mt-4 flex items-center gap-3 rounded-control bg-brand-50 px-3 py-2.5 text-sm text-brand-800">
+        <div className="mt-4 flex items-center gap-3 rounded-control bg-brand-50 px-3 py-2.5 text-sm text-brand-800 ring-1 ring-brand-600/15 ring-inset">
           <Icon name="folder" size={18} />
           <span className="min-w-0 flex-1">
             <span className="block truncate font-medium">{folder}</span>
-            <span className="block text-xs text-brand-700/80">
+            <span className="block text-xs text-brand-700">
               {files.length} archivo{files.length === 1 ? '' : 's'} (incluye subcarpetas)
               {skipped > 0 && ` · ${skipped} ignorado${skipped === 1 ? '' : 's'} por no ser imagen ni PDF`}
             </span>
@@ -135,47 +157,52 @@ export default function UploadZone({ onUploaded }) {
             type="button"
             aria-label="Quitar la carpeta"
             onClick={clear}
-            className="rounded-full p-1 text-brand-700 hover:bg-brand-100"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-control text-brand-700 hover:bg-brand-100"
           >
-            <Icon name="x" size={14} />
+            <Icon name="x" size={15} />
           </button>
         </div>
       )}
 
       {files.length > 0 && (
-        <ul className="mt-4 max-h-72 divide-y divide-line overflow-y-auto rounded-control border border-line">
-          {files.map((file) => (
-            <li key={(file.webkitRelativePath || file.name) + file.size} className="flex items-center gap-3 px-3 py-2 text-sm">
-              <Icon name={file.type === 'application/pdf' ? 'file' : 'image'} size={16} className="text-subtle" />
-              <span className="min-w-0 flex-1 truncate">{file.webkitRelativePath || file.name}</span>
-              <span className="tabular text-xs text-subtle">{fileSize(file.size)}</span>
-              <button
-                type="button"
-                aria-label={`Quitar ${file.name}`}
-                onClick={() => setFiles((current) => current.filter((f) => f !== file))}
-                className="rounded-full p-1 text-subtle hover:bg-surface hover:text-ink"
-              >
-                <Icon name="x" size={14} />
-              </button>
-            </li>
-          ))}
-        </ul>
+        <div className="mt-4">
+          <div className="mb-2 flex items-center justify-between text-xs">
+            <span className="font-medium text-muted">
+              {files.length} archivo{files.length === 1 ? '' : 's'} listo{files.length === 1 ? '' : 's'} ·{' '}
+              <span className="tabular">{fileSize(files.reduce((sum, f) => sum + f.size, 0))}</span>
+            </span>
+            <button type="button" onClick={clear} className="rounded font-medium text-muted hover:text-danger-600">
+              Quitar todos
+            </button>
+          </div>
+          <ul className="max-h-72 divide-y divide-line overflow-y-auto rounded-control border border-line">
+            {files.map((file) => (
+              <li key={(file.webkitRelativePath || file.name) + file.size} className="flex items-center gap-3 py-1.5 pr-1.5 pl-3 text-sm">
+                <Icon name={file.type === 'application/pdf' ? 'file' : 'image'} size={16} className="text-subtle" />
+                <span className="min-w-0 flex-1 truncate">{file.webkitRelativePath || file.name}</span>
+                <span className="tabular text-xs text-subtle">{fileSize(file.size)}</span>
+                <button
+                  type="button"
+                  aria-label={`Quitar ${file.name}`}
+                  onClick={() => setFiles((current) => current.filter((f) => f !== file))}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-control text-subtle hover:bg-surface hover:text-ink"
+                >
+                  <Icon name="x" size={14} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
-      <div className="mt-4 space-y-3">
+      <div className="mt-5 space-y-3">
         <ErrorBox message={error} />
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-xs text-muted">
-            Los agentes separan cada documento, lo clasifican, leen sus datos y validan los montos. Los desconocidos se descartan.
-          </p>
-          <Button
-            icon="sparkles"
-            disabled={!files.length || busy || (folder && files.length > MAX_FOLDER_FILES)}
-            onClick={upload}
-          >
-            {busy ? 'Subiendo…' : `Procesar ${files.length || ''} archivo${files.length === 1 ? '' : 's'}`}
-          </Button>
-        </div>
+        <Button icon="sparkles" className="w-full" disabled={!files.length || busy || tooMany} onClick={upload}>
+          {busy ? 'Subiendo…' : `Procesar ${files.length || ''} archivo${files.length === 1 ? '' : 's'}`}
+        </Button>
+        <p className="text-xs leading-relaxed text-subtle">
+          Los agentes separan cada documento, lo clasifican, leen sus datos y validan los montos. Los que no se reconocen pasan a revisión.
+        </p>
       </div>
     </Card>
   )

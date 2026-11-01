@@ -33,10 +33,11 @@ def pdf_bytes(pages: int, size: tuple[int, int] = (850, 1100)) -> bytes:
 
 # --- Respuestas simuladas del segmentador-clasificador ---
 
-def detected(doc_type="DESCONOCIDO", evidence=None, number=None, continuation=False, index=1, region=None, confidence=0.95):
+def detected(doc_type="DESCONOCIDO", evidence=None, number=None, continuation=False, index=1, region=None, confidence=0.95, basis="TITULO"):
     return {
         "index": index,
         "doc_type": doc_type,
+        "type_basis": basis,
         "confidence": confidence,
         "evidence": evidence,
         "document_number_seen": number,

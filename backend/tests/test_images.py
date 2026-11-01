@@ -43,7 +43,8 @@ def test_document_without_folio(client, fake_ai):
     fake_ai.pages = {1: page_response(detected("CONTROL_INTERNO", "CONTROL INTERNO", None))}
     fake_ai.extractions = [extraction(DOCUMENT_NUMBER=ABSENT)]
     _upload(client)
-    assert _documents(client)[0]["imagen"] == "CI_76123456-0_.png"
+    # Un control interno lleva siempre el RUT fijo de OXXO
+    assert _documents(client)[0]["imagen"] == "CI_76084682-1_.png"
 
 
 def test_correction_renames_the_image(client, fake_ai):

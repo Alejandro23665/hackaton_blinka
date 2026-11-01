@@ -22,9 +22,13 @@ def _pending_document(client, fake_ai, **fields):
     return doc
 
 
+# Un descuadre confirmado: va a revisión humana
+MISMATCH = {"NET_AMOUNT": reading("$ 110.000")}
+
+
 def test_correction_is_saved_under_the_reviewer_and_leaves_the_queue(client, fake_ai):
-    doc = _pending_document(client, fake_ai, NET_AMOUNT=reading("1?0.000", status="ILEGIBLE", confidence=0.2))
-    assert (doc["usuario"], doc["total_neto"]) == ("Modelo IA", 0)
+    doc = _pending_document(client, fake_ai, **MISMATCH)
+    assert (doc["usuario"], doc["observaciones"], doc["total_neto"]) == ("Modelo IA", "DESCUADRE", 110000)
 
     response = client.put(f"/documentos/{doc['id']}/correccion", json=FIX)
     assert response.status_code == 200, response.text
@@ -33,7 +37,7 @@ def test_correction_is_saved_under_the_reviewer_and_leaves_the_queue(client, fak
     assert (fixed["rut_proveedor"], fixed["total_neto"], fixed["firma"]) == ("76123456-0", 100000, True)
     assert fixed["revisado_en"] is not None
     # Lo que marcó la IA queda como registro
-    assert fixed["campos_dudosos"] == ["total_neto"]
+    assert fixed["campos_dudosos"] == ["total_neto", "iva", "total"]
     assert client.get("/documentos", params={"requiere_revision": True}).json()["total"] == 0
 
 
@@ -50,7 +54,8 @@ def test_correction_rejects_invalid_data(client, fake_ai):
     doc = _pending_document(client, fake_ai, TOTAL_AMOUNT=reading("$ 120.000"))
     url = f"/documentos/{doc['id']}/correccion"
     assert "RUT no válido" in client.put(url, json={**FIX, "rut_proveedor": "76.123.456-1"}).json()["detail"]
-    assert "Faltan montos" in client.put(url, json={**FIX, "iva": None}).json()["detail"]
+    # Un monto que no se puede leer va vacío: la suma no se comprueba y queda NO_LEGIBLE
+    assert client.put(url, json={**FIX, "iva": None}).json()["observaciones"] == "NO_LEGIBLE"
     assert client.put(url, json={**FIX, "total": -5}).status_code == 422
     # Una guía sin valorizar no lleva montos
     unvalued = {**FIX, "tipo": "GD", "total_neto": None, "iva": None, "total": None}
@@ -96,3 +101,40 @@ def test_day_totals(client, fake_ai, clean_db):
         "registrados": 3, "procesados_ia": 1, "requieren_revision": 1, "revisados": 1, "pendientes_total": 2,
     }
     assert client.get("/documentos/dia", params={"fecha": "2000-01-01"}).json()["registrados"] == 0
+
+
+def test_accepting_keeps_the_data_and_leaves_the_queue(client, fake_ai):
+    doc = _pending_document(client, fake_ai, **MISMATCH)
+    response = client.post(f"/documentos/{doc['id']}/aceptar")
+    assert response.status_code == 200, response.text
+    accepted = response.json()
+    # Nada cambia salvo quién lo revisó y cuándo
+    unchanged = ("tipo", "rut_proveedor", "folio", "fecha", "total_neto", "total", "observaciones", "imagen", "campos_faltantes", "campos_dudosos")
+    assert {k: accepted[k] for k in unchanged} == {k: doc[k] for k in unchanged}
+    assert (accepted["usuario"], accepted["requiere_revision"]) == ("Rita Revisora", False)
+    assert accepted["revisado_en"] is not None
+    assert client.get("/documentos", params={"requiere_revision": True}).json()["total"] == 0
+    assert client.post("/documentos/999/aceptar").status_code == 404
+
+
+def test_correction_without_a_readable_date_is_saved_as_not_legible(client, fake_ai):
+    doc = _pending_document(client, fake_ai, **MISMATCH)
+
+    response = client.put(f"/documentos/{doc['id']}/correccion", json={**FIX, "fecha": None})
+    assert response.status_code == 200, response.text
+    fixed = response.json()
+    assert (fixed["fecha"], fixed["observaciones"], fixed["requiere_revision"]) == (None, "NO_LEGIBLE", False)
+    assert fixed["total_neto"] == 100000
+
+
+def test_correction_can_leave_every_unreadable_field_empty(client, fake_ai):
+    doc = _pending_document(client, fake_ai, **MISMATCH)
+    empty = {**FIX, "rut_proveedor": None, "folio": "", "fecha": None, "total_neto": None, "iva": 19000, "total": None}
+
+    response = client.put(f"/documentos/{doc['id']}/correccion", json=empty)
+    assert response.status_code == 200, response.text
+    fixed = response.json()
+    # Como al procesar: RUT ilegible 1-9, folio y fecha sin valor; lo que sí se escribió se guarda
+    assert (fixed["rut_proveedor"], fixed["folio"], fixed["fecha"]) == ("1-9", None, None)
+    assert (fixed["total_neto"], fixed["iva"], fixed["total"]) == (None, 19000, None)
+    assert (fixed["observaciones"], fixed["requiere_revision"], fixed["usuario"]) == ("NO_LEGIBLE", False, "Rita Revisora")

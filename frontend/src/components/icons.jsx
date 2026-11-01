@@ -1,4 +1,4 @@
-/** Iconos lineales (trazo 1.75, 24x24) para mantener un estilo único sin dependencias. */
+/** Iconos lineales (trazo 1.75, 24x24, puntas redondeadas): un único estilo, sin dependencias. */
 const PATHS = {
   arrowUpRight: 'M7 17 17 7M8 7h9v9',
   check: 'm5 12.5 4.5 4.5L19 7.5',
@@ -29,6 +29,24 @@ const PATHS = {
   layers: 'M12 3 3 8l9 5 9-5-9-5Zm-9 9 9 5 9-5',
   chart: 'M4 20h16M7 16v-5m5 5V8m5 8v-3',
   trash: 'M4 7h16M10 11v6m4-6v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2',
+  home: 'M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1v-8.5Z',
+  scan: 'M4 8V5a1 1 0 0 1 1-1h3m8 0h3a1 1 0 0 1 1 1v3m0 8v3a1 1 0 0 1-1 1h-3m-8 0H5a1 1 0 0 1-1-1v-3m4-4 2.5 2.5L16 9',
+  users: 'M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm-6 9a6 6 0 0 1 12 0m1-16.5a3.5 3.5 0 0 1 0 7m2 9.5h3a6 6 0 0 0-3.5-5.5',
+  logout: 'M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3m-5-3 5-5-5-5m5 5H4',
+  help: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm-2.5-11.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6m0 3h.01',
+  eyeOff: 'M3 3l18 18M10.6 5.1A9.8 9.8 0 0 1 12 5c5 0 8.5 4.5 9.5 7a13 13 0 0 1-2.4 3.6M6.6 6.6C4.4 8 3 10.2 2.5 12c1 2.5 4.5 7 9.5 7 1.8 0 3.4-.6 4.8-1.4M9.9 9.9a3 3 0 0 0 4.2 4.2',
+  notEqual: 'M5 9h14M5 15h14M16 5 8 19',
+  flag: 'M5 21V4m0 0h11l-2 4 2 4H5',
+  checkCircle: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm-4-9 2.8 2.8L16 9.5',
+  clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13v4l3 2',
+  loader: 'M12 3a9 9 0 1 0 9 9',
+  pause: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm-2-12v6m4-6v6',
+  minus: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm-4-9h8',
+  copy: 'M9 9h10v10H9zM5 15V5h10',
+  bolt: 'M13 3 5 13.5h6L10 21l8-10.5h-6L13 3Z',
+  mail: 'M4 6h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Zm-1 1 9 6.5L21 7',
+  calendar: 'M5 6h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Zm-1 4h16M8 4v4m8-4v4',
+  phone: 'M5 4h3.5l1.5 4.5-2 1.5a11 11 0 0 0 6 6l1.5-2 4.5 1.5V19a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1Z',
 }
 
 export default function Icon({ name, size = 18, className = '', strokeWidth = 1.75 }) {

@@ -47,8 +47,9 @@ def test_metrics_summarize_usage_and_performance(client, fake_ai, clean_db):
     assert len(usage["por_dia"]) == 7 and usage["por_dia"][-1]["tokens_entrada"] == 9000
 
     ia = metrics["ia"]
-    assert (ia["documentos"], ia["sin_intervencion"], ia["pendientes"]) == (3, 1, 2)
-    assert (ia["pendientes_no_legibles"], ia["pendientes_descuadre"]) == (1, 1)
+    # La fecha ilegible queda NO_LEGIBLE sin ir a revisión: la resolvió la IA
+    assert (ia["documentos"], ia["sin_intervencion"], ia["pendientes"]) == (3, 2, 1)
+    assert (ia["pendientes_no_legibles"], ia["pendientes_descuadre"]) == (0, 1)
     assert {c["campo"]: (c["faltante"], c["dudoso"]) for c in ia["campos"]}["fecha"] == (1, 0)
 
     system = metrics["sistema"]
